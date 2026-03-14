@@ -1,16 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-app.py
-Strict manual-execution Hotel Booking Cancellation app
-
-Rules implemented:
-- App startup: UI only, no dataset processing
-- User must manually load dataset from sidebar
-- After load: still no cleaning / filtering / split / FE / modeling automatically
-- Every heavy step runs only when its button is clicked
-- Altair only
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -39,9 +27,9 @@ from sklearn.metrics import (
 )
 
 
-# ---------------------------------------------------------------------
+# ============================================================
 # PAGE CONFIG
-# ---------------------------------------------------------------------
+# ============================================================
 st.set_page_config(page_title="Hotel Cancellation Prediction", layout="wide")
 alt.data_transformers.disable_max_rows()
 
@@ -60,8 +48,8 @@ def _apply_altair_theme():
             "legend": {"labelLimit": 260},
         }
     }
-    alt.themes.register("streamlit_safe_hotel_strict", lambda: theme)
-    alt.themes.enable("streamlit_safe_hotel_strict")
+    alt.themes.register("hotel_manual_app_theme", lambda: theme)
+    alt.themes.enable("hotel_manual_app_theme")
 
 
 _apply_altair_theme()
@@ -70,18 +58,19 @@ st.title("🏨 Hotel Booking Cancellation Prediction")
 with st.expander("🎯 Tujuan", expanded=True):
     st.markdown(
         """
-App ini dibuat dengan eksekusi manual penuh:
-- startup hanya menampilkan UI,
-- data dimasukkan manual dari sidebar,
-- cleaning, filtering, split room, feature engineering, modeling, importance, PDP, dan simulator hanya jalan saat tombolnya diklik.
+App ini mengikuti aturan eksekusi manual penuh:
+- app startup hanya menampilkan UI,
+- tidak membaca file apa pun sebelum user upload sendiri,
+- tidak ada cleaning / filtering / split / feature engineering / modeling otomatis,
+- semua proses berat hanya jalan setelah tombol diklik.
 """
     )
 
 
-# ---------------------------------------------------------------------
+# ============================================================
 # STATE HELPERS
-# ---------------------------------------------------------------------
-def clear_runtime(clear_data: bool = False):
+# ============================================================
+def reset_pipeline_state(clear_data: bool = False) -> None:
     keys = [
         "df_clean",
         "df_filtered",
@@ -95,24 +84,55 @@ def clear_runtime(clear_data: bool = False):
         "model_metrics",
         "fi_intrinsic",
         "pdp_candidates",
-        "filter_applied",
     ]
     if clear_data:
-        keys += ["df_raw", "data_source"]
-    for k in keys:
-        st.session_state.pop(k, None)
+        keys += ["df_raw"]
+    for key in keys:
+        st.session_state.pop(key, None)
 
 
-# ---------------------------------------------------------------------
-# CACHED READERS / TRANSFORMS
-# ---------------------------------------------------------------------
+# ============================================================
+# FILE LOAD - MANUAL ONLY
+# ============================================================
 @st.cache_data(show_spinner=False)
-def read_csv_cached(file_bytes=None, repo_path=None, source="upload"):
-    if source == "upload":
-        return pd.read_csv(io.BytesIO(file_bytes), low_memory=False)
-    return pd.read_csv(repo_path, low_memory=False)
+def read_uploaded_csv(file_bytes: bytes) -> pd.DataFrame:
+    return pd.read_csv(io.BytesIO(file_bytes), low_memory=False)
 
 
+with st.sidebar:
+    st.header("Data source")
+    with st.form("upload_form"):
+        uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="manual_upload_csv")
+        load_btn = st.form_submit_button("Load data")
+
+    st.header("Manual limits")
+    preview_rows = st.number_input("Preview rows", min_value=20, max_value=5000, value=300, step=20)
+    split_rows = st.number_input("Rows for split room", min_value=20, max_value=5000, value=300, step=20)
+    model_rows = st.number_input("Rows for modeling", min_value=100, max_value=5000, value=1000, step=50)
+
+if load_btn:
+    reset_pipeline_state(clear_data=True)
+    if uploaded_file is None:
+        st.sidebar.warning("Upload CSV dulu.")
+    else:
+        try:
+            st.session_state["df_raw"] = read_uploaded_csv(uploaded_file.getvalue())
+            st.sidebar.success("Data loaded.")
+        except Exception as e:
+            st.sidebar.error(f"Gagal load data: {e}")
+
+if "df_raw" not in st.session_state:
+    st.info("Upload file CSV kamu sendiri dari sidebar, lalu klik **Load data**.")
+    st.stop()
+
+
+df_raw = st.session_state["df_raw"]
+st.caption(f"Rows loaded: **{len(df_raw):,}**")
+
+
+# ============================================================
+# TRANSFORM HELPERS - MANUAL EXECUTION ONLY
+# ============================================================
 @st.cache_data(show_spinner=False)
 def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
@@ -148,9 +168,9 @@ def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
 def apply_filters(df: pd.DataFrame, filter_cols: list[str], selections: dict[str, list]) -> pd.DataFrame:
     out = df.copy()
     for c in filter_cols:
-        chosen = selections.get(c, [])
-        if chosen:
-            out = out[out[c].astype(str).isin([str(v) for v in chosen])]
+        vals = selections.get(c, [])
+        if vals:
+            out = out[out[c].astype(str).isin([str(v) for v in vals])]
     return out
 
 
@@ -160,7 +180,7 @@ def split_rooms_cap4(row: pd.Series) -> list[dict]:
     babies = int(row.get("babies", 0) or 0)
 
     minors = children + babies
-    rooms = []
+    rooms: list[tuple[int, int, int]] = []
     violation = False
 
     while minors > 0:
@@ -207,9 +227,9 @@ def split_rooms_cap4(row: pd.Series) -> list[dict]:
 
 
 @st.cache_data(show_spinner=False)
-def build_room_level_dataset(df: pd.DataFrame, max_rows: int = 500) -> pd.DataFrame:
+def build_room_level_dataset(df: pd.DataFrame, max_rows: int = 300) -> pd.DataFrame:
     work = df.head(max_rows).copy()
-    records = []
+    records: list[dict] = []
     for _, row in work.iterrows():
         records.extend(split_rooms_cap4(row))
 
@@ -241,8 +261,8 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     if {"adr", "stay_nights"}.issubset(out.columns):
         out["room_revenue"] = out["adr"].fillna(0) * out["stay_nights"].fillna(0)
     if {"bookingID", "room_revenue"}.issubset(out.columns):
-        rev = out.groupby("bookingID")["room_revenue"].sum().rename("booking_revenue")
-        out = out.merge(rev, on="bookingID", how="left")
+        booking_rev = out.groupby("bookingID")["room_revenue"].sum().rename("booking_revenue")
+        out = out.merge(booking_rev, on="bookingID", how="left")
 
     if "arrival_date_month" in out.columns:
         season_map = {
@@ -278,7 +298,10 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def make_preprocessor(X: pd.DataFrame):
+# ============================================================
+# MODEL HELPERS
+# ============================================================
+def make_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
     num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = X.select_dtypes(include=["object", "string", "category", "bool"]).columns.tolist()
 
@@ -289,33 +312,47 @@ def make_preprocessor(X: pd.DataFrame):
 
     return ColumnTransformer(
         transformers=[
-            ("num", Pipeline([("imp", SimpleImputer(strategy="median")), ("sc", StandardScaler())]), num_cols),
-            ("cat", Pipeline([("imp", SimpleImputer(strategy="most_frequent")), ("ohe", ohe)]), cat_cols),
+            (
+                "num",
+                Pipeline([
+                    ("imp", SimpleImputer(strategy="median")),
+                    ("sc", StandardScaler()),
+                ]),
+                num_cols,
+            ),
+            (
+                "cat",
+                Pipeline([
+                    ("imp", SimpleImputer(strategy="most_frequent")),
+                    ("ohe", ohe),
+                ]),
+                cat_cols,
+            ),
         ],
         remainder="drop",
     )
 
 
-def prepare_model_data(df: pd.DataFrame):
+def prepare_model_data(df: pd.DataFrame, max_rows: int = 1000):
     target = "is_canceled"
     if target not in df.columns:
         raise ValueError("Kolom is_canceled tidak ditemukan.")
 
     work = df.copy()
-    if len(work) > 2000:
-        work = work.sample(2000, random_state=42).copy()
+    if len(work) > max_rows:
+        work = work.sample(max_rows, random_state=42).copy()
 
     if "reservation_status_date" in work.columns:
         train_df = work[work["reservation_status_date"] < "2019-01-01"].copy()
         test_df = work[work["reservation_status_date"] >= "2019-01-01"].copy()
         if len(train_df) < 50 or len(test_df) < 20:
-            split = int(len(work) * 0.8)
-            train_df = work.iloc[:split].copy()
-            test_df = work.iloc[split:].copy()
+            split_ix = int(len(work) * 0.8)
+            train_df = work.iloc[:split_ix].copy()
+            test_df = work.iloc[split_ix:].copy()
     else:
-        split = int(len(work) * 0.8)
-        train_df = work.iloc[:split].copy()
-        test_df = work.iloc[split:].copy()
+        split_ix = int(len(work) * 0.8)
+        train_df = work.iloc[:split_ix].copy()
+        test_df = work.iloc[split_ix:].copy()
 
     drop_cols = [target, "Invoice_ID", "bookingID", "reservation_status_date", "reservation_status"]
     X_train = train_df.drop(columns=[c for c in drop_cols if c in train_df.columns], errors="ignore")
@@ -326,7 +363,7 @@ def prepare_model_data(df: pd.DataFrame):
 
 
 @st.cache_resource(show_spinner=False)
-def train_fast_model(X_train, y_train):
+def train_fast_model(X_train: pd.DataFrame, y_train: pd.Series) -> Pipeline:
     preprocessor = make_preprocessor(X_train)
     pipe = Pipeline([
         ("preprocess", preprocessor),
@@ -336,7 +373,7 @@ def train_fast_model(X_train, y_train):
     return pipe
 
 
-def evaluate_model(pipe, X_test, y_test, threshold=0.5):
+def evaluate_model(pipe: Pipeline, X_test: pd.DataFrame, y_test: pd.Series, threshold: float = 0.5) -> dict:
     prob = pipe.predict_proba(X_test)[:, 1]
     pred = (prob >= threshold).astype(int)
     return {
@@ -368,7 +405,7 @@ def get_feature_names(pipe: Pipeline) -> list[str]:
         return names
 
 
-def get_intrinsic_importance(pipe: Pipeline):
+def get_intrinsic_importance(pipe: Pipeline) -> pd.DataFrame | None:
     model = pipe.named_steps["model"]
     feat_names = get_feature_names(pipe)
     if hasattr(model, "coef_"):
@@ -379,7 +416,7 @@ def get_intrinsic_importance(pipe: Pipeline):
 
 
 @st.cache_data(show_spinner=False)
-def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: int = 20):
+def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: int = 20) -> pd.DataFrame:
     s = pd.to_numeric(X_ref[feat], errors="coerce")
     vals = np.linspace(s.quantile(0.05), s.quantile(0.95), grid_size)
     pdp_vals = []
@@ -390,58 +427,9 @@ def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: in
     return pd.DataFrame({feat: vals, "pred_prob": pdp_vals})
 
 
-# ---------------------------------------------------------------------
-# SIDEBAR - LOAD ONLY
-# ---------------------------------------------------------------------
-with st.sidebar:
-    st.header("Data source")
-    with st.form("load_form"):
-        source_choice = st.radio("Choose", ["Upload file (CSV)", "Repo file (path)"], key="src_choice")
-        uploaded = None
-        repo_path = None
-
-        if source_choice == "Upload file (CSV)":
-            uploaded = st.file_uploader("Upload CSV", type=["csv"], key="uploader_csv")
-        else:
-            repo_path = st.text_input("Path file", value="", key="repo_path")
-
-        load_btn = st.form_submit_button("Load data")
-
-    st.header("Manual limits")
-    preview_rows = st.number_input("Preview rows", min_value=50, max_value=20000, value=1000, step=50)
-    split_rows = st.number_input("Rows for split room", min_value=50, max_value=5000, value=500, step=50)
-
-if load_btn:
-    clear_runtime(clear_data=True)
-    try:
-        if source_choice == "Upload file (CSV)":
-            if uploaded is None:
-                st.sidebar.warning("Upload CSV dulu.")
-            else:
-                st.session_state["df_raw"] = read_csv_cached(file_bytes=uploaded.getvalue(), source="upload")
-                st.session_state["data_source"] = "upload"
-                st.sidebar.success("Data loaded.")
-        else:
-            if not repo_path.strip():
-                st.sidebar.warning("Isi path dulu.")
-            else:
-                st.session_state["df_raw"] = read_csv_cached(repo_path=repo_path.strip(), source="repo")
-                st.session_state["data_source"] = "repo"
-                st.sidebar.success("Data loaded.")
-    except Exception as e:
-        st.sidebar.error(f"Gagal load data: {e}")
-
-if "df_raw" not in st.session_state:
-    st.info("Masukkan dataset dari sidebar lalu klik **Load data**.")
-    st.stop()
-
-st.caption(f"Sumber data: **{st.session_state.get('data_source', 'unknown')}**")
-st.write(f"Rows loaded: **{len(st.session_state['df_raw']):,}**")
-
-
-# ---------------------------------------------------------------------
+# ============================================================
 # TABS
-# ---------------------------------------------------------------------
+# ============================================================
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
     [
         "Overview",
@@ -456,58 +444,47 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
 )
 
 
-# ---------------------------------------------------------------------
+# ============================================================
 # TAB 1 - OVERVIEW
-# ---------------------------------------------------------------------
+# ============================================================
 with tab1:
     st.subheader("Raw preview only")
-    raw_preview = st.session_state["df_raw"].head(int(preview_rows)).copy()
-    st.dataframe(raw_preview.head(20), use_container_width=True)
+    st.dataframe(df_raw.head(int(preview_rows)).head(20), use_container_width=True)
     summary = pd.DataFrame(
         {
             "metric": ["rows loaded", "columns", "duplicates"],
-            "value": [len(st.session_state["df_raw"]), st.session_state["df_raw"].shape[1], int(st.session_state["df_raw"].duplicated().sum())],
+            "value": [len(df_raw), df_raw.shape[1], int(df_raw.duplicated().sum())],
         }
     )
     st.dataframe(summary, use_container_width=True)
 
 
-# ---------------------------------------------------------------------
+# ============================================================
 # TAB 2 - CLEANING
-# ---------------------------------------------------------------------
+# ============================================================
 with tab2:
     st.subheader("Cleaning")
-    st.caption("Tidak ada cleaning otomatis. Klik tombol ini kalau memang ingin cleaning.")
+    st.caption("Tidak ada cleaning otomatis. Jalankan hanya kalau kamu klik tombol.")
+
     if st.button("Run cleaning", key="btn_clean"):
-        st.session_state["df_clean"] = basic_clean(st.session_state["df_raw"])
-        clear_runtime(clear_data=False)
-        st.session_state["df_clean"] = basic_clean(st.session_state["df_raw"])
+        cleaned = basic_clean(df_raw)
+        reset_pipeline_state(clear_data=False)
+        st.session_state["df_clean"] = cleaned
         st.success("Cleaning selesai.")
 
     if "df_clean" in st.session_state:
         st.dataframe(st.session_state["df_clean"].head(20), use_container_width=True)
 
 
-# ---------------------------------------------------------------------
+# ============================================================
 # TAB 3 - FILTERING
-# ---------------------------------------------------------------------
+# ============================================================
 with tab3:
     st.subheader("Filtering")
-    st.caption("Filtering juga manual. Tidak ada filter yang jalan otomatis.")
+    st.caption("Filtering juga manual. Tidak ada filter otomatis.")
 
-    source_df = st.session_state.get("df_clean", st.session_state["df_raw"])
-
-    filter_candidates = []
-    preferred = [
-        "hotel", "arrival_date_month", "market_segment", "distribution_channel",
-        "deposit_type", "customer_type", "country", "meal",
-    ]
-    for c in preferred:
-        if c in source_df.columns:
-            filter_candidates.append(c)
-    for c in source_df.columns:
-        if source_df[c].dtype == "object" and c not in filter_candidates:
-            filter_candidates.append(c)
+    source_df = st.session_state.get("df_clean", df_raw)
+    filter_candidates = [c for c in source_df.columns if source_df[c].dtype == "object"]
 
     with st.form("filter_form"):
         filter_cols = st.multiselect("Pilih kolom filter", options=filter_candidates, default=[])
@@ -515,13 +492,15 @@ with tab3:
         for c in filter_cols:
             opts = sorted(source_df[c].dropna().astype(str).unique().tolist())
             filter_selections[c] = st.multiselect(c, options=opts, default=[])
-        apply_filter_btn = st.form_submit_button("Apply filters")
+        apply_btn = st.form_submit_button("Apply filters")
 
-    if apply_filter_btn:
-        st.session_state["df_filtered"] = apply_filters(source_df, filter_cols, filter_selections)
-        clear_runtime(clear_data=False)
-        st.session_state["df_filtered"] = apply_filters(source_df, filter_cols, filter_selections)
-        st.session_state["filter_applied"] = True
+    if apply_btn:
+        filtered = apply_filters(source_df, filter_cols, filter_selections)
+        keep_clean = st.session_state.get("df_clean")
+        reset_pipeline_state(clear_data=False)
+        if keep_clean is not None:
+            st.session_state["df_clean"] = keep_clean
+        st.session_state["df_filtered"] = filtered
         st.success("Filter diterapkan.")
 
     if "df_filtered" in st.session_state:
@@ -529,15 +508,15 @@ with tab3:
         st.dataframe(st.session_state["df_filtered"].head(20), use_container_width=True)
 
 
-# ---------------------------------------------------------------------
+# ============================================================
 # TAB 4 - SPLIT ROOM
-# ---------------------------------------------------------------------
+# ============================================================
 with tab4:
     st.subheader("Split Room")
-    st.caption("Split room hanya jalan saat tombol diklik, dan dibatasi oleh rows limit.")
+    st.caption("Split room dibatasi oleh rows limit dan hanya jalan saat tombol diklik.")
 
     if st.button("Run split room", key="btn_split"):
-        source_df = st.session_state.get("df_filtered", st.session_state.get("df_clean", st.session_state["df_raw"]))
+        source_df = st.session_state.get("df_filtered", st.session_state.get("df_clean", df_raw))
         st.session_state["df_room"] = build_room_level_dataset(source_df, max_rows=int(split_rows))
         st.success("Split room selesai.")
 
@@ -547,25 +526,27 @@ with tab4:
         st.dataframe(df_room.head(20), use_container_width=True)
 
 
-# ---------------------------------------------------------------------
+# ============================================================
 # TAB 5 - EDA
-# ---------------------------------------------------------------------
+# ============================================================
 with tab5:
     st.subheader("EDA")
-    st.caption("EDA memakai data terakhir yang sudah kamu proses manual.")
+    st.caption("EDA memakai data terakhir yang kamu proses manual.")
 
-    eda_source = (
-        st.session_state.get("df_room")
-        or st.session_state.get("df_filtered")
-        or st.session_state.get("df_clean")
-        or st.session_state["df_raw"]
-    )
+    if "df_room" in st.session_state:
+        eda_source = st.session_state["df_room"]
+    elif "df_filtered" in st.session_state:
+        eda_source = st.session_state["df_filtered"]
+    elif "df_clean" in st.session_state:
+        eda_source = st.session_state["df_clean"]
+    else:
+        eda_source = df_raw
 
     if "is_canceled" in eda_source.columns:
         target_df = eda_source["is_canceled"].value_counts().sort_index().reset_index()
         target_df.columns = ["is_canceled", "count"]
         target_df["label"] = target_df["is_canceled"].map({0: "Not Canceled", 1: "Canceled"})
-        chart_target = (
+        target_chart = (
             alt.Chart(target_df)
             .mark_bar()
             .encode(
@@ -575,9 +556,19 @@ with tab5:
             )
             .properties(height=260)
         )
-        st.altair_chart(chart_target, use_container_width=True)
+        st.altair_chart(target_chart, use_container_width=True)
 
-    cat_candidates = [c for c in ["hotel", "arrival_date_month", "market_segment", "distribution_channel", "deposit_type", "customer_type", "bulk_3p_rooms"] if c in eda_source.columns]
+    cat_candidates = [
+        c for c in [
+            "hotel",
+            "arrival_date_month",
+            "market_segment",
+            "distribution_channel",
+            "deposit_type",
+            "customer_type",
+            "bulk_3p_rooms",
+        ] if c in eda_source.columns
+    ]
     if cat_candidates and "is_canceled" in eda_source.columns:
         cat_sel = st.selectbox("Pilih kolom kategori", options=cat_candidates, key="eda_cat")
         rate_df = eda_source.groupby(cat_sel)["is_canceled"].mean().mul(100).sort_values(ascending=False).reset_index(name="cancel_rate")
@@ -596,9 +587,9 @@ with tab5:
         st.altair_chart(rate_chart, use_container_width=True)
 
 
-# ---------------------------------------------------------------------
+# ============================================================
 # TAB 6 - FEATURE ENGINEERING
-# ---------------------------------------------------------------------
+# ============================================================
 with tab6:
     st.subheader("Feature Engineering")
     st.caption("Feature engineering hanya jalan setelah klik tombol.")
@@ -614,22 +605,29 @@ with tab6:
     if "df_model" in st.session_state:
         df_model = st.session_state["df_model"]
         st.dataframe(df_model.head(20), use_container_width=True)
-        st.write("Contoh fitur baru:", [c for c in ["minors", "party_size", "stay_nights", "weekend_ratio", "booking_revenue", "season", "lead_time_bin", "adr_bin", "family_flag", "req_flag", "car_flag"] if c in df_model.columns])
+        feature_examples = [
+            c for c in [
+                "minors", "party_size", "stay_nights", "weekend_ratio", "room_revenue",
+                "booking_revenue", "season", "lead_time_bin", "adr_bin", "family_flag",
+                "req_flag", "car_flag",
+            ] if c in df_model.columns
+        ]
+        st.write("Contoh fitur baru:", feature_examples)
 
 
-# ---------------------------------------------------------------------
+# ============================================================
 # TAB 7 - MODELING
-# ---------------------------------------------------------------------
+# ============================================================
 with tab7:
     st.subheader("Modeling")
-    st.caption("Modeling hanya jalan saat tombol diklik. Tidak ada training otomatis.")
+    st.caption("Modeling tidak jalan sebelum tombol diklik. Model cepat: Logistic Regression.")
 
     if st.button("Run model", key="btn_model"):
         source_df = st.session_state.get("df_model")
         if source_df is None:
             st.warning("Run feature engineering dulu.")
         else:
-            X_train, X_test, y_train, y_test = prepare_model_data(source_df)
+            X_train, X_test, y_train, y_test = prepare_model_data(source_df, max_rows=int(model_rows))
             pipe = train_fast_model(X_train, y_train)
             metrics = evaluate_model(pipe, X_test, y_test)
             st.session_state["X_train"] = X_train
@@ -652,21 +650,22 @@ with tab7:
         st.dataframe(cmp, use_container_width=True)
 
 
-# ---------------------------------------------------------------------
+# ============================================================
 # TAB 8 - IMPORTANCE + PDP + SIMULATOR
-# ---------------------------------------------------------------------
+# ============================================================
 with tab8:
     st.subheader("Importance + PDP + Simulator")
 
-    c1, c2 = st.columns(2)
-    with c1:
+    left, right = st.columns(2)
+    with left:
         if st.button("Generate importance", key="btn_imp"):
             if "model_pipe" not in st.session_state:
                 st.warning("Run model dulu.")
             else:
                 st.session_state["fi_intrinsic"] = get_intrinsic_importance(st.session_state["model_pipe"])
                 st.success("Importance selesai.")
-    with c2:
+
+    with right:
         if st.button("Prepare PDP", key="btn_pdp"):
             if "model_pipe" not in st.session_state:
                 st.warning("Run model dulu.")
@@ -676,7 +675,7 @@ with tab8:
 
     if "fi_intrinsic" in st.session_state and st.session_state["fi_intrinsic"] is not None:
         fi = st.session_state["fi_intrinsic"].head(20)
-        ch = (
+        fi_chart = (
             alt.Chart(fi)
             .mark_bar()
             .encode(
@@ -687,12 +686,12 @@ with tab8:
             .properties(height=380)
             .interactive()
         )
-        st.altair_chart(ch, use_container_width=True)
+        st.altair_chart(fi_chart, use_container_width=True)
 
     if "pdp_candidates" in st.session_state and st.session_state["pdp_candidates"]:
         feat = st.selectbox("Pilih fitur numerik untuk PDP", options=st.session_state["pdp_candidates"], key="pdp_feat")
         pdp_df = compute_pdp_1d(st.session_state["model_pipe"], st.session_state["X_test"].copy(), feat, grid_size=20)
-        ch = (
+        pdp_chart = (
             alt.Chart(pdp_df)
             .mark_line(point=True)
             .encode(
@@ -703,7 +702,7 @@ with tab8:
             .properties(height=320)
             .interactive()
         )
-        st.altair_chart(ch, use_container_width=True)
+        st.altair_chart(pdp_chart, use_container_width=True)
 
     st.markdown("### Simulator")
     if "model_pipe" not in st.session_state:
@@ -725,7 +724,7 @@ with tab8:
                     "previous_cancellations", "previous_bookings_not_canceled", "deposit_type",
                     "customer_type", "adr", "required_car_parking_spaces",
                     "total_of_special_requests", "bulk_3p_rooms", "season", "lead_time_bin",
-                    "adr_bin", "family_flag", "req_flag", "car_flag"
+                    "adr_bin", "family_flag", "req_flag", "car_flag",
                 ] if c in X_train.columns
             ]
 
@@ -768,9 +767,9 @@ with tab8:
             prob = float(pipe.predict_proba(sim_df)[:, 1][0])
             pred_label = "Canceled" if prob >= threshold else "Not Canceled"
 
-            a, b = st.columns(2)
-            a.metric("Predicted cancel probability", f"{prob:.2%}")
-            b.metric("Predicted class", pred_label)
+            c1, c2 = st.columns(2)
+            c1.metric("Predicted cancel probability", f"{prob:.2%}")
+            c2.metric("Predicted class", pred_label)
 
             donut_df = pd.DataFrame({"label": ["Cancel", "Remaining"], "value": [prob, 1 - prob]})
             donut_chart = (
