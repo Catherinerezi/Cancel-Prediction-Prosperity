@@ -4,11 +4,17 @@ TakeHomeTestDS_HotelCancellation_streamlit.py
 
 Streamlit app for:
 - Hotel booking cancellation prediction (is_canceled)
-- Interactive EDA with Altair
-- Room-level transformation and feature engineering
-- Model training & tuning (LogReg / RandomForest / LightGBM*)
-- Feature importance (intrinsic + permutation)
-- Threshold tuning and prediction simulator
+- Exploratory data analysis with tabs + Altair
+- Room-level transformation
+- Feature engineering
+- Model training & tuning (LogReg / RF / LightGBM*)
+- Feature importance
+- PDP
+- Booking simulator
+
+Notes:
+- Structured to mirror the Food ETA app style: tabs, expanders, staged execution.
+- Heavy steps only run when needed.
 """
 
 from __future__ import annotations
@@ -24,16 +30,1046 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.inspection import permutation_importance
 from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
     brier_score_loss,
     log_loss,
-    confusion_matrix,
     precision_score,
     recall_score,
     f1_score,
+    confusion_matrix,
 )
+
+HAS_LGBM = False
+try:
+    from lightgbm import LGBMClassifier
+    HAS_LGBM = True
+except Exception:
+    HAS_LGBM = False
+
+
+# ---------------------------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------------------------
+st.set_page_config(page_title="Prediksi Cancel Booking Hotel", layout="wide")
+st.title("🏨 Prediksi Cancel Booking Hotel")
+
+with st.expander("🎯 Tujuan", expanded=True):
+    st.markdown(
+        """
+**Goal**  
+Membangun app prediktif untuk memperkirakan kemungkinan booking hotel akan **cancel** (`is_canceled`),
+sehingga tim bisnis/operasional dapat:
+
+- Mengidentifikasi booking berisiko tinggi untuk cancel  
+- Memahami faktor-faktor yang mendorong pembatalan  
+- Membandingkan beberapa model klasifikasi  
+- Menentukan threshold keputusan yang lebih tepat  
+- Melakukan simulasi probabilitas cancel untuk satu booking
+"""
+    )
+
+
+# ---------------------------------------------------------------------
+# DATA LOADING
+# ---------------------------------------------------------------------
+@st.cache_data(show_spinner=True)
+def load_data() -> pd.DataFrame:
+    file_id = "1Qu4Q8rwWM7TN_Bqzmpw0EtlLsaaiuVtj"
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    return pd.read_csv(url)
+
+
+# ---------------------------------------------------------------------
+# BASIC CLEANING
+# ---------------------------------------------------------------------
+@st.cache_data(show_spinner=True)
+def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    for c in out.select_dtypes(include=["object"]).columns:
+        out[c] = (
+            out[c]
+            .astype("string")
+            .str.strip()
+            .str.replace(r"\s+", " ", regex=True)
+        )
+
+    if "reservation_status_date" in out.columns:
+        out["reservation_status_date"] = pd.to_datetime(
+            out["reservation_status_date"], errors="coerce"
+        )
+
+    fill_candidates = ["agent", "country", "children"]
+    for c in fill_candidates:
+        if c in out.columns:
+            if pd.api.types.is_numeric_dtype(out[c]):
+                out[c] = out[c].fillna(out[c].median(skipna=True))
+            else:
+                m = out[c].mode(dropna=True)
+                if not m.empty:
+                    out[c] = out[c].fillna(m.iat[0])
+
+    if "is_canceled" in out.columns:
+        out["is_canceled"] = pd.to_numeric(out["is_canceled"], errors="coerce").fillna(0).astype(int)
+
+    return out
+
+
+# ---------------------------------------------------------------------
+# ROOM-LEVEL SPLIT
+# ---------------------------------------------------------------------
+def split_rooms_cap4(row: pd.Series) -> list[dict]:
+    adults = int(row.get("adults", 0) or 0)
+    children = int(row.get("children", 0) or 0)
+    babies = int(row.get("babies", 0) or 0)
+
+    minors = children + babies
+    rooms: list[tuple[int, int, int]] = []
+    violation = False
+
+    while minors > 0:
+        a = 1 if adults > 0 else 0
+        if a == 0:
+            violation = True
+        else:
+            adults -= 1
+
+        take = min(3, minors)
+        c_take = min(children, take)
+        b_take = min(babies, take - c_take)
+        children -= c_take
+        babies -= b_take
+        minors -= c_take + b_take
+
+        extra_adults = min(4 - a - c_take - b_take, adults)
+        adults -= extra_adults
+        a += extra_adults
+        rooms.append((a, c_take, b_take))
+
+    while adults > 0:
+        a = min(4, adults)
+        rooms.append((a, 0, 0))
+        adults -= a
+
+    if not rooms:
+        rooms = [(0, 0, 0)]
+
+    base = row.to_dict()
+    out = []
+    for a, c, b in rooms:
+        r = base.copy()
+        r.update(
+            {
+                "adults": a,
+                "children": c,
+                "babies": b,
+                "viol_minors_without_adult": violation,
+            }
+        )
+        out.append(r)
+    return out
+
+
+@st.cache_data(show_spinner=True)
+def build_room_level_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    records = []
+    for _, row in df.iterrows():
+        records.extend(split_rooms_cap4(row))
+
+    out = pd.DataFrame(records).reset_index(drop=True)
+    out["bookingID"] = out["bookingID"].astype(str)
+    out["Invoice_ID"] = np.arange(1, len(out) + 1, dtype=int)
+    out["rooms_in_booking"] = out.groupby("bookingID")["Invoice_ID"].transform("count")
+    out["bulk_3p_rooms"] = out["rooms_in_booking"] >= 3
+
+    viol = (out["adults"] < 1) & ((out["children"] + out["babies"]) > 0)
+    bad_ids = out.loc[viol, "bookingID"].unique()
+    if len(bad_ids) > 0:
+        out = out[~out["bookingID"].isin(bad_ids)].reset_index(drop=True)
+        out["Invoice_ID"] = np.arange(1, len(out) + 1, dtype=int)
+        out["rooms_in_booking"] = out.groupby("bookingID")["Invoice_ID"].transform("count")
+        out["bulk_3p_rooms"] = out["rooms_in_booking"] >= 3
+
+    return out
+
+
+# ---------------------------------------------------------------------
+# FEATURE ENGINEERING
+# ---------------------------------------------------------------------
+@st.cache_data(show_spinner=True)
+def add_features(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    out["minors"] = out["children"] + out["babies"]
+    out["party_size"] = out["adults"] + out["minors"]
+    out["stay_nights"] = out["stays_in_week_nights"] + out["stays_in_weekend_nights"]
+    out["weekend_ratio"] = np.where(
+        out["stay_nights"] > 0,
+        out["stays_in_weekend_nights"] / out["stay_nights"],
+        0.0,
+    )
+    out["room_revenue"] = out["adr"] * out["stay_nights"]
+
+    revenue = out.groupby("bookingID")["room_revenue"].sum().rename("booking_revenue")
+    out = out.merge(revenue, on="bookingID", how="left")
+
+    season_map = {
+        "December": "High",
+        "January": "High",
+        "February": "High",
+        "June": "Peak",
+        "July": "Peak",
+        "August": "Peak",
+    }
+    out["season"] = out["arrival_date_month"].map(season_map).fillna("Shoulder")
+
+    out["lead_time_bin"] = pd.cut(
+        out["lead_time"],
+        bins=[-1, 7, 30, 90, 180, 9999],
+        labels=["≤7d", "8–30d", "31–90d", "91–180d", ">180d"],
+    )
+
+    try:
+        out["adr_bin"] = pd.qcut(
+            out["adr"].rank(method="first"),
+            q=5,
+            labels=["Q1", "Q2", "Q3", "Q4", "Q5"],
+        )
+    except Exception:
+        out["adr_bin"] = "Q3"
+
+    out["family_flag"] = (out["children"] + out["babies"]) > 0
+    out["couple_flag"] = (out["adults"] == 2) & ((out["children"] + out["babies"]) == 0)
+    out["solo_flag"] = (out["adults"] == 1) & ((out["children"] + out["babies"]) == 0)
+    out["waiting_list_flag"] = out["days_in_waiting_list"] > 0
+    out["req_flag"] = out["total_of_special_requests"] > 0
+    out["car_flag"] = out["required_car_parking_spaces"] > 0
+    out["room_mismatch_flag"] = out["reserved_room_type"].astype(str) != out["assigned_room_type"].astype(str)
+    out["changes_flag"] = out["booking_changes"] > 0
+
+    return out
+
+
+# ---------------------------------------------------------------------
+# MODEL PREP
+# ---------------------------------------------------------------------
+@st.cache_data(show_spinner=True)
+def prepare_model_data(df: pd.DataFrame):
+    target = "is_canceled"
+
+    work = df.copy()
+    if "reservation_status_date" not in work.columns:
+        raise ValueError("Kolom reservation_status_date tidak ditemukan.")
+
+    train_df = work[work["reservation_status_date"] < "2019-01-01"].copy()
+    test_df = work[work["reservation_status_date"] >= "2019-01-01"].copy()
+
+    drop_cols = [
+        target,
+        "Invoice_ID",
+        "bookingID",
+        "reservation_status_date",
+        "reservation_status",
+    ]
+    drop_cols = [c for c in drop_cols if c in work.columns]
+
+    X_train = train_df.drop(columns=drop_cols, errors="ignore")
+    y_train = train_df[target].astype(int)
+    X_test = test_df.drop(columns=drop_cols, errors="ignore")
+    y_test = test_df[target].astype(int)
+
+    return X_train, X_test, y_train, y_test
+
+
+# ---------------------------------------------------------------------
+# PREPROCESSING
+# ---------------------------------------------------------------------
+def make_preprocessor(X: pd.DataFrame, scale_num: bool = True) -> ColumnTransformer:
+    num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = X.select_dtypes(include=["object", "string", "category", "bool"]).columns.tolist()
+
+    num_steps = [("imputer", SimpleImputer(strategy="median"))]
+    if scale_num:
+        num_steps.append(("scaler", StandardScaler()))
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", Pipeline(num_steps), num_cols),
+            (
+                "cat",
+                Pipeline(
+                    [
+                        ("imputer", SimpleImputer(strategy="most_frequent")),
+                        ("ohe", OneHotEncoder(handle_unknown="ignore")),
+                    ]
+                ),
+                cat_cols,
+            ),
+        ],
+        remainder="drop",
+    )
+    return preprocessor
+
+
+# ---------------------------------------------------------------------
+# MODELING
+# ---------------------------------------------------------------------
+def evaluate_classifier(pipe, X_test, y_test, threshold=0.5):
+    prob = pipe.predict_proba(X_test)[:, 1]
+    pred = (prob >= threshold).astype(int)
+    return {
+        "roc_auc": roc_auc_score(y_test, prob),
+        "pr_auc": average_precision_score(y_test, prob),
+        "brier": brier_score_loss(y_test, prob),
+        "logloss": log_loss(y_test, prob),
+        "precision": precision_score(y_test, pred, zero_division=0),
+        "recall": recall_score(y_test, pred, zero_division=0),
+        "f1": f1_score(y_test, pred, zero_division=0),
+    }
+
+
+@st.cache_resource(show_spinner=True)
+def train_all_models(X_train, y_train, X_test, y_test):
+    preprocessor = make_preprocessor(X_train, scale_num=True)
+    cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+
+    candidates = [
+        (
+            "Logistic Regression",
+            Pipeline(
+                [
+                    ("preprocess", preprocessor),
+                    (
+                        "model",
+                        LogisticRegression(
+                            max_iter=2000,
+                            solver="liblinear",
+                            class_weight="balanced",
+                            random_state=42,
+                        ),
+                    ),
+                ]
+            ),
+            {"model__C": [0.5, 1.0, 2.0]},
+        ),
+        (
+            "Random Forest",
+            Pipeline(
+                [
+                    ("preprocess", preprocessor),
+                    (
+                        "model",
+                        RandomForestClassifier(
+                            n_estimators=250,
+                            random_state=42,
+                            n_jobs=-1,
+                            class_weight="balanced_subsample",
+                        ),
+                    ),
+                ]
+            ),
+            {
+                "model__max_depth": [8, 12, None],
+                "model__min_samples_leaf": [1, 3],
+            },
+        ),
+    ]
+
+    if HAS_LGBM:
+        candidates.append(
+            (
+                "LightGBM",
+                Pipeline(
+                    [
+                        ("preprocess", preprocessor),
+                        (
+                            "model",
+                            LGBMClassifier(
+                                n_estimators=250,
+                                learning_rate=0.05,
+                                subsample=0.8,
+                                colsample_bytree=0.8,
+                                random_state=42,
+                                n_jobs=-1,
+                            ),
+                        ),
+                    ]
+                ),
+                {
+                    "model__num_leaves": [31, 63],
+                    "model__min_child_samples": [20, 40],
+                },
+            )
+        )
+
+    rows = []
+    best_models = {}
+
+    for name, pipe, grid in candidates:
+        gs = GridSearchCV(
+            estimator=pipe,
+            param_grid=grid,
+            scoring="roc_auc",
+            cv=cv,
+            n_jobs=-1,
+            refit=True,
+            verbose=0,
+        )
+        gs.fit(X_train, y_train)
+        best_pipe = clone(gs.best_estimator_)
+        best_pipe.fit(X_train, y_train)
+        best_models[name] = best_pipe
+
+        metrics = evaluate_classifier(best_pipe, X_test, y_test)
+        rows.append(
+            {
+                "model": name,
+                "roc_auc": metrics["roc_auc"],
+                "pr_auc": metrics["pr_auc"],
+                "brier": metrics["brier"],
+                "logloss": metrics["logloss"],
+                "precision": metrics["precision"],
+                "recall": metrics["recall"],
+                "f1": metrics["f1"],
+                "best_params": gs.best_params_,
+            }
+        )
+
+    cmp = pd.DataFrame(rows).sort_values(["roc_auc", "pr_auc"], ascending=[False, False]).reset_index(drop=True)
+    best_name = cmp.loc[0, "model"]
+    best_pipe = best_models[best_name]
+    return cmp, best_name, best_pipe, best_models
+
+
+# ---------------------------------------------------------------------
+# IMPORTANCE HELPERS
+# ---------------------------------------------------------------------
+def get_feature_names(pipe: Pipeline) -> list[str]:
+    ct = pipe.named_steps["preprocess"]
+    try:
+        return list(ct.get_feature_names_out())
+    except Exception:
+        names = []
+        for name, trans, cols in ct.transformers_:
+            if name == "num":
+                names.extend(list(cols))
+            elif name == "cat":
+                try:
+                    ohe = trans.named_steps["ohe"]
+                    names.extend(list(ohe.get_feature_names_out(cols)))
+                except Exception:
+                    names.extend(list(cols))
+        return names
+
+
+@st.cache_data(show_spinner=True)
+def get_intrinsic_importance(pipe: Pipeline) -> pd.DataFrame | None:
+    model = pipe.named_steps["model"]
+    feat_names = get_feature_names(pipe)
+
+    if hasattr(model, "feature_importances_"):
+        fi = pd.DataFrame({"feature": feat_names, "importance": model.feature_importances_})
+        return fi.sort_values("importance", ascending=False).reset_index(drop=True)
+
+    if hasattr(model, "coef_"):
+        coef = np.ravel(model.coef_)
+        fi = pd.DataFrame({"feature": feat_names, "importance": np.abs(coef)})
+        return fi.sort_values("importance", ascending=False).reset_index(drop=True)
+
+    return None
+
+
+@st.cache_data(show_spinner=True)
+def get_permutation_importance(pipe: Pipeline, X_test: pd.DataFrame, y_test: pd.Series) -> pd.DataFrame:
+    r = permutation_importance(
+        pipe,
+        X_test,
+        y_test,
+        n_repeats=5,
+        random_state=42,
+        n_jobs=-1,
+        scoring="average_precision",
+    )
+    feat_names = get_feature_names(pipe)
+    k = min(len(feat_names), len(r.importances_mean))
+    out = pd.DataFrame(
+        {
+            "feature": feat_names[:k],
+            "perm_importance": r.importances_mean[:k],
+        }
+    )
+    return out.sort_values("perm_importance", ascending=False).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------
+# PDP HELPER
+# ---------------------------------------------------------------------
+@st.cache_data(show_spinner=True)
+def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: int = 25):
+    s = pd.to_numeric(X_ref[feat], errors="coerce")
+    vals = np.linspace(s.quantile(0.05), s.quantile(0.95), grid_size)
+    pdp_vals = []
+    for v in vals:
+        temp = X_ref.copy()
+        temp[feat] = v
+        pdp_vals.append(pipe.predict_proba(temp)[:, 1].mean())
+    return pd.DataFrame({feat: vals, "pred_prob": pdp_vals})
+
+
+# ---------------------------------------------------------------------
+# SESSION HELPERS
+# ---------------------------------------------------------------------
+def ensure_processed_data(df_clean: pd.DataFrame):
+    if "df_room" not in st.session_state:
+        st.session_state["df_room"] = build_room_level_dataset(df_clean)
+    if "df_model" not in st.session_state:
+        st.session_state["df_model"] = add_features(st.session_state["df_room"])
+    if "split_ready" not in st.session_state:
+        X_train, X_test, y_train, y_test = prepare_model_data(st.session_state["df_model"])
+        st.session_state["X_train"] = X_train
+        st.session_state["X_test"] = X_test
+        st.session_state["y_train"] = y_train
+        st.session_state["y_test"] = y_test
+        st.session_state["split_ready"] = True
+
+
+def ensure_modeling(df_clean: pd.DataFrame):
+    ensure_processed_data(df_clean)
+    if "best_pipe" not in st.session_state:
+        cmp, best_name, best_pipe, model_map = train_all_models(
+            st.session_state["X_train"],
+            st.session_state["y_train"],
+            st.session_state["X_test"],
+            st.session_state["y_test"],
+        )
+        st.session_state["cmp"] = cmp
+        st.session_state["best_name"] = best_name
+        st.session_state["best_pipe"] = best_pipe
+        st.session_state["model_map"] = model_map
+
+
+# ---------------------------------------------------------------------
+# LOAD RAW + BASIC CLEAN ONLY ON STARTUP
+# ---------------------------------------------------------------------
+df_raw = load_data()
+df = basic_clean(df_raw)
+
+
+# ---------------------------------------------------------------------
+# TABS
+# ---------------------------------------------------------------------
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+    [
+        "Data Understanding",
+        "Cleaning & Split Room",
+        "EDA",
+        "Feature Engineering",
+        "Modeling",
+        "Importance + PDP",
+        "Simulator",
+    ]
+)
+
+
+# ---------------------------------------------------------------------
+# TAB 1 - DATA UNDERSTANDING
+# ---------------------------------------------------------------------
+with tab1:
+    st.header("Data Undertanding")
+
+    c1, c2, c3 = st.columns([2, 2, 3])
+
+    with c1:
+        st.subheader("Shape & Head")
+        st.write("Shape:", df.shape)
+        st.dataframe(df.head(), use_container_width=True)
+
+    with c2:
+        st.subheader("Describe")
+        st.dataframe(df.describe(include="all").T, use_container_width=True)
+
+    with c3:
+        st.subheader("Dtypes")
+        st.json({col: str(tp) for col, tp in df.dtypes.items()})
+
+    st.subheader("Cek Duplikat")
+    st.write(f"Jumlah duplikat: **{int(df.duplicated().sum())}**")
+
+    st.subheader("Cek Missing Value")
+    missing_pct = (df.isna().mean() * 100).sort_values(ascending=False).round(2)
+    missing_df = missing_pct.reset_index()
+    missing_df.columns = ["column", "missing_pct"]
+
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        st.dataframe(missing_df, use_container_width=True)
+
+    with cc2:
+        chart_missing = (
+            alt.Chart(missing_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("missing_pct:Q", title="% Missing"),
+                y=alt.Y("column:N", sort="-x", title="Column"),
+                tooltip=["column", alt.Tooltip("missing_pct:Q", format=".2f")],
+            )
+            .properties(height=max(200, 20 * len(missing_df)))
+            .interactive()
+        )
+        st.altair_chart(chart_missing, use_container_width=True)
+
+
+# ---------------------------------------------------------------------
+# TAB 2 - CLEANING & SPLIT ROOM
+# ---------------------------------------------------------------------
+with tab2:
+    st.header("Cleaning & Split Room")
+    st.caption("Bagian ini mengikuti logic transform booking ke room-level, tetapi baru dijalankan saat dibutuhkan.")
+
+    if st.button("Run cleaning + split room", key="btn_split_room"):
+        ensure_processed_data(df)
+        st.success("Cleaning + split room selesai.")
+
+    if "df_room" in st.session_state:
+        df_room = st.session_state["df_room"]
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Room-level shape")
+            st.write(df_room.shape)
+            st.dataframe(df_room.head(), use_container_width=True)
+        with c2:
+            st.subheader("Split room checks")
+            summary_split = pd.DataFrame(
+                {
+                    "metric": [
+                        "Rows after split",
+                        "Unique bookingID",
+                        "Avg rooms per booking",
+                        "Bulk 3+ rooms",
+                    ],
+                    "value": [
+                        len(df_room),
+                        df_room["bookingID"].nunique(),
+                        round(df_room.groupby("bookingID").size().mean(), 2),
+                        int(df_room["bulk_3p_rooms"].sum()),
+                    ],
+                }
+            )
+            st.dataframe(summary_split, use_container_width=True)
+
+        bulk_room = (
+            df_room.groupby("bulk_3p_rooms")["is_canceled"]
+            .mean()
+            .mul(100)
+            .reset_index(name="cancel_rate")
+        )
+        bulk_room["type"] = bulk_room["bulk_3p_rooms"].map({False: "Non-bulk", True: "Bulk"})
+        chart_bulk = (
+            alt.Chart(bulk_room)
+            .mark_bar()
+            .encode(
+                x=alt.X("type:N", title="Booking type"),
+                y=alt.Y("cancel_rate:Q", title="Cancel rate (%)"),
+                tooltip=["type", alt.Tooltip("cancel_rate:Q", format=".2f")],
+            )
+            .properties(height=320)
+            .interactive()
+        )
+        st.altair_chart(chart_bulk, use_container_width=True)
+    else:
+        st.info("Klik tombol di atas untuk menjalankan cleaning + split room.")
+
+
+# ---------------------------------------------------------------------
+# TAB 3 - EDA
+# ---------------------------------------------------------------------
+with tab3:
+    st.header("EDA ringan + interaktif")
+
+    if st.button("Prepare data for EDA", key="btn_eda_prep"):
+        ensure_processed_data(df)
+        st.success("Data untuk EDA siap.")
+
+    if "df_model" in st.session_state:
+        eda_df = st.session_state["df_model"]
+
+        st.subheader("Distribusi Target: is_canceled")
+        target_df = (
+            eda_df["is_canceled"].value_counts().sort_index().reset_index()
+        )
+        target_df.columns = ["is_canceled", "count"]
+        target_df["label"] = target_df["is_canceled"].map({0: "Not Canceled", 1: "Canceled"})
+        target_chart = (
+            alt.Chart(target_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("label:N", title="Status"),
+                y=alt.Y("count:Q", title="Count"),
+                tooltip=["label", "count"],
+            )
+            .properties(height=300)
+            .interactive()
+        )
+        st.altair_chart(target_chart, use_container_width=True)
+
+        st.subheader("Cancel Rate by Category")
+        cat_candidates = [
+            c for c in [
+                "hotel",
+                "arrival_date_month",
+                "market_segment",
+                "distribution_channel",
+                "deposit_type",
+                "customer_type",
+                "season",
+                "lead_time_bin",
+                "adr_bin",
+                "bulk_3p_rooms",
+                "family_flag",
+            ] if c in eda_df.columns
+        ]
+        cat_sel = st.selectbox("Pilih kolom kategori:", cat_candidates, index=0)
+        cancel_by_cat = (
+            eda_df.groupby(cat_sel)["is_canceled"]
+            .mean()
+            .mul(100)
+            .sort_values(ascending=False)
+            .reset_index(name="cancel_rate")
+        )
+        cancel_by_cat[cat_sel] = cancel_by_cat[cat_sel].astype(str)
+        cat_chart = (
+            alt.Chart(cancel_by_cat)
+            .mark_bar()
+            .encode(
+                x=alt.X("cancel_rate:Q", title="Cancel rate (%)"),
+                y=alt.Y(f"{cat_sel}:N", sort="-x", title=cat_sel),
+                tooltip=[cat_sel, alt.Tooltip("cancel_rate:Q", format=".2f")],
+            )
+            .properties(height=max(220, 24 * len(cancel_by_cat)))
+            .interactive()
+        )
+        st.altair_chart(cat_chart, use_container_width=True)
+
+        st.subheader("ADR vs Numeric Feature")
+        num_candidates = [c for c in ["lead_time", "stay_nights", "adults", "children", "booking_revenue"] if c in eda_df.columns]
+        x_num = st.selectbox("Pilih fitur numerik untuk scatter:", num_candidates, index=0)
+        scatter = (
+            alt.Chart(eda_df[[x_num, "adr", "is_canceled"]].dropna())
+            .mark_circle(opacity=0.45)
+            .encode(
+                x=alt.X(f"{x_num}:Q", title=x_num),
+                y=alt.Y("adr:Q", title="ADR"),
+                color=alt.Color("is_canceled:N", title="Canceled"),
+                tooltip=[
+                    alt.Tooltip(f"{x_num}:Q", format=".2f"),
+                    alt.Tooltip("adr:Q", format=".2f"),
+                    "is_canceled:N",
+                ],
+            )
+            .properties(height=350)
+            .interactive()
+        )
+        st.altair_chart(scatter, use_container_width=True)
+    else:
+        st.info("Klik 'Prepare data for EDA' dulu.")
+
+
+# ---------------------------------------------------------------------
+# TAB 4 - FEATURE ENGINEERING
+# ---------------------------------------------------------------------
+with tab4:
+    st.header("Feature Engineering")
+
+    if st.button("Run feature engineering", key="btn_fe"):
+        ensure_processed_data(df)
+        st.success("Feature engineering selesai.")
+
+    if "df_model" in st.session_state:
+        df_model = st.session_state["df_model"]
+
+        num_cols = df_model.select_dtypes(include=[np.number]).columns.tolist()
+        cat_cols = df_model.select_dtypes(include=["object", "string", "category", "bool"]).columns.tolist()
+
+        st.write(
+            "Contoh fitur numerik baru:",
+            [c for c in ["minors", "party_size", "stay_nights", "weekend_ratio", "room_revenue", "booking_revenue"] if c in num_cols],
+        )
+        st.write(
+            "Contoh fitur kategori/flag baru:",
+            [c for c in ["season", "lead_time_bin", "adr_bin", "family_flag", "couple_flag", "solo_flag", "waiting_list_flag", "req_flag", "car_flag"] if c in df_model.columns],
+        )
+
+        fe_summary = pd.DataFrame(
+            {
+                "type": ["numeric features", "categorical/bool features", "total columns"],
+                "value": [len(num_cols), len(cat_cols), df_model.shape[1]],
+            }
+        )
+        st.dataframe(fe_summary, use_container_width=True)
+    else:
+        st.info("Klik tombol FE dulu.")
+
+
+# ---------------------------------------------------------------------
+# TAB 5 - MODELING
+# ---------------------------------------------------------------------
+with tab5:
+    st.header("Tuning via CV + Evaluasi Model")
+
+    if st.button("Run modeling", key="btn_modeling"):
+        ensure_modeling(df)
+        st.success("Modeling selesai.")
+
+    if "cmp" in st.session_state:
+        cmp = st.session_state["cmp"].copy()
+        best_name = st.session_state["best_name"]
+
+        st.success(f"Best by ROC-AUC: **{best_name}**")
+        show_cmp = cmp.copy()
+        metric_cols = ["roc_auc", "pr_auc", "brier", "logloss", "precision", "recall", "f1"]
+        for c in metric_cols:
+            if c in show_cmp.columns:
+                show_cmp[c] = show_cmp[c].round(4)
+        st.dataframe(show_cmp, use_container_width=True)
+
+        metric_pick = st.selectbox(
+            "Pilih metrik model comparison:",
+            ["roc_auc", "pr_auc", "brier", "logloss", "precision", "recall", "f1"],
+            index=0,
+        )
+        plot_df = show_cmp[["model", metric_pick]].copy()
+        sort_rule = "-x" if metric_pick in ["roc_auc", "pr_auc", "precision", "recall", "f1"] else "x"
+        chart_model = (
+            alt.Chart(plot_df)
+            .mark_bar()
+            .encode(
+                x=alt.X(f"{metric_pick}:Q", title=metric_pick),
+                y=alt.Y("model:N", sort=sort_rule, title="Model"),
+                tooltip=["model", alt.Tooltip(f"{metric_pick}:Q", format=".4f")],
+            )
+            .properties(height=300)
+            .interactive()
+        )
+        st.altair_chart(chart_model, use_container_width=True)
+    else:
+        st.info("Klik tombol Run modeling dulu.")
+
+
+# ---------------------------------------------------------------------
+# TAB 6 - IMPORTANCE + PDP
+# ---------------------------------------------------------------------
+with tab6:
+    st.header("Feature Importance + PDP")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        if st.button("Generate feature importance", key="btn_importance"):
+            ensure_modeling(df)
+            pipe = st.session_state["best_pipe"]
+            X_test = st.session_state["X_test"]
+            y_test = st.session_state["y_test"]
+            st.session_state["fi_intrinsic"] = get_intrinsic_importance(pipe)
+            st.session_state["fi_perm"] = get_permutation_importance(pipe, X_test, y_test)
+            st.success("Feature importance selesai.")
+
+    with c2:
+        if st.button("Generate PDP", key="btn_pdp"):
+            ensure_modeling(df)
+            pipe = st.session_state["best_pipe"]
+            X_test = st.session_state["X_test"]
+            num_candidates = X_test.select_dtypes(include=[np.number]).columns.tolist()
+            st.session_state["pdp_candidates"] = num_candidates
+            if num_candidates:
+                st.session_state["pdp_default"] = num_candidates[0]
+            st.success("PDP siap dipilih.")
+
+    if "fi_intrinsic" in st.session_state or "fi_perm" in st.session_state:
+        st.subheader("Intrinsic Importance / Coefficients")
+        fi_intrinsic = st.session_state.get("fi_intrinsic")
+        if fi_intrinsic is not None:
+            chart_int = (
+                alt.Chart(fi_intrinsic.head(20))
+                .mark_bar()
+                .encode(
+                    x=alt.X("importance:Q", title="Importance / |Coefficient|"),
+                    y=alt.Y("feature:N", sort="-x"),
+                    tooltip=["feature", alt.Tooltip("importance:Q", format=".6f")],
+                )
+                .properties(height=400)
+                .interactive()
+            )
+            st.altair_chart(chart_int, use_container_width=True)
+        else:
+            st.info("Model ini tidak expose intrinsic importance.")
+
+        st.subheader("Permutation Importance")
+        fi_perm = st.session_state.get("fi_perm")
+        if fi_perm is not None:
+            chart_perm = (
+                alt.Chart(fi_perm.head(20))
+                .mark_bar()
+                .encode(
+                    x=alt.X("perm_importance:Q", title="Δ Average Precision"),
+                    y=alt.Y("feature:N", sort="-x"),
+                    tooltip=["feature", alt.Tooltip("perm_importance:Q", format=".6f")],
+                )
+                .properties(height=400)
+                .interactive()
+            )
+            st.altair_chart(chart_perm, use_container_width=True)
+
+    if "pdp_candidates" in st.session_state:
+        st.subheader("PDP (Partial Dependence) untuk fitur numerik utama")
+        X_test = st.session_state["X_test"]
+        pipe = st.session_state["best_pipe"]
+        feat_pdp = st.selectbox(
+            "Pilih fitur numerik untuk PDP 1D:",
+            st.session_state["pdp_candidates"],
+            index=0,
+        )
+        pdp_df = compute_pdp_1d(pipe, X_test.copy(), feat_pdp, grid_size=40)
+        chart_pdp = (
+            alt.Chart(pdp_df)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X(f"{feat_pdp}:Q", title=feat_pdp),
+                y=alt.Y("pred_prob:Q", title="Predicted cancel probability"),
+                tooltip=[alt.Tooltip(feat_pdp, format=".3f"), alt.Tooltip("pred_prob:Q", format=".4f")],
+            )
+            .properties(height=350, title=f"PDP — {feat_pdp}")
+            .interactive()
+        )
+        st.altair_chart(chart_pdp, use_container_width=True)
+
+    if "best_pipe" not in st.session_state:
+        st.info("Jalankan modeling dulu, lalu generate importance / PDP.")
+
+
+# ---------------------------------------------------------------------
+# TAB 7 - SIMULATOR
+# ---------------------------------------------------------------------
+with tab7:
+    st.header("Booking Cancellation Simulator")
+
+    if st.button("Prepare simulator", key="btn_simulator"):
+        ensure_modeling(df)
+        st.success("Simulator siap.")
+
+    if "best_pipe" in st.session_state:
+        X_train = st.session_state["X_train"]
+        X_test = st.session_state["X_test"]
+        y_test = st.session_state["y_test"]
+        pipe = st.session_state["best_pipe"]
+
+        sim_cols = list(X_train.columns)
+        default_row = X_train.mode(dropna=True).iloc[0].copy()
+
+        with st.form("sim_form"):
+            st.caption("Isi beberapa field utama untuk lihat probabilitas cancel.")
+            user_input = {}
+
+            picked = [
+                c for c in [
+                    "hotel",
+                    "lead_time",
+                    "arrival_date_month",
+                    "stays_in_week_nights",
+                    "stays_in_weekend_nights",
+                    "adults",
+                    "children",
+                    "babies",
+                    "meal",
+                    "market_segment",
+                    "distribution_channel",
+                    "is_repeated_guest",
+                    "previous_cancellations",
+                    "previous_bookings_not_canceled",
+                    "deposit_type",
+                    "customer_type",
+                    "adr",
+                    "required_car_parking_spaces",
+                    "total_of_special_requests",
+                    "bulk_3p_rooms",
+                    "season",
+                    "lead_time_bin",
+                    "adr_bin",
+                    "family_flag",
+                    "req_flag",
+                    "car_flag",
+                ] if c in sim_cols
+            ]
+
+            for col in picked:
+                s = X_train[col]
+                if pd.api.types.is_bool_dtype(s):
+                    user_input[col] = st.selectbox(col, [False, True], index=int(bool(default_row.get(col, False))))
+                elif pd.api.types.is_numeric_dtype(s):
+                    v = float(default_row.get(col, s.median()))
+                    user_input[col] = st.number_input(col, value=float(v))
+                else:
+                    opts = sorted([str(x) for x in s.dropna().astype(str).unique().tolist()])
+                    default_val = str(default_row.get(col, opts[0] if opts else ""))
+                    default_idx = opts.index(default_val) if default_val in opts else 0
+                    user_input[col] = st.selectbox(col, opts, index=default_idx)
+
+            threshold = st.slider("Threshold probability", 0.05, 0.95, 0.50, 0.01)
+            submitted = st.form_submit_button("Predict")
+
+        st.subheader("Threshold Diagnostics on Test Set")
+        prob_test = pipe.predict_proba(X_test)[:, 1]
+        pred_test = (prob_test >= threshold).astype(int)
+        tn, fp, fn, tp = confusion_matrix(y_test, pred_test).ravel()
+        diag_df = pd.DataFrame(
+            {
+                "metric": ["Precision", "Recall", "F1", "TP", "FP", "FN", "TN"],
+                "value": [
+                    precision_score(y_test, pred_test, zero_division=0),
+                    recall_score(y_test, pred_test, zero_division=0),
+                    f1_score(y_test, pred_test, zero_division=0),
+                    tp,
+                    fp,
+                    fn,
+                    tn,
+                ],
+            }
+        )
+        st.dataframe(diag_df, use_container_width=True)
+
+        if submitted:
+            sim_row = default_row.copy()
+            for k, v in user_input.items():
+                sim_row[k] = v
+            sim_df = pd.DataFrame([sim_row])[X_train.columns]
+            prob = float(pipe.predict_proba(sim_df)[:, 1][0])
+            pred_label = "Canceled" if prob >= threshold else "Not Canceled"
+
+            st.metric("Predicted cancel probability", f"{prob:.2%}")
+            st.write(f"Predicted class at threshold {threshold:.2f}: **{pred_label}**")
+
+            donut_df = pd.DataFrame(
+                {"label": ["Cancel", "Remaining"], "value": [prob, 1 - prob]}
+            )
+            donut_chart = (
+                alt.Chart(donut_df)
+                .mark_arc(innerRadius=70)
+                .encode(
+                    theta="value:Q",
+                    color="label:N",
+                    tooltip=["label", alt.Tooltip("value:Q", format=".2%")],
+                )
+                .properties(width=300, height=300, title="Prediction donut")
+                .interactive()
+            )
+            st.altair_chart(donut_chart, use_container_width=False)
+    else:
+        st.info("Klik Prepare simulator dulu.")
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.inspection import permutation_importance
