@@ -3,21 +3,19 @@
 app.py
 Hotel Booking Cancellation Prediction
 
-Altair-only Streamlit app with:
-- Sidebar data source (upload CSV / repo path)
-- Data understanding
-- Cleaning + room split
-- EDA
+Streamlit app with:
+- Sidebar data source (manual submit)
+- Global filters
+- Tabs for workflow
+- Altair-only charts
+- Room splitting
 - Feature engineering
 - Modeling + tuning
 - Feature importance
 - PDP
 - Booking simulator
 
-Designed to follow the interaction style of the user's Food ETA app:
-- user provides data first
-- tabs organize workflow
-- heavy computation runs only when user clicks buttons
+Heavy computation is executed only when the user clicks the relevant button.
 """
 
 from __future__ import annotations
@@ -25,6 +23,7 @@ from __future__ import annotations
 import warnings
 warnings.filterwarnings("ignore")
 
+import io
 import numpy as np
 import pandas as pd
 import altair as alt
@@ -59,7 +58,7 @@ except Exception:
 
 
 # ---------------------------------------------------------------------
-# PAGE
+# PAGE CONFIG
 # ---------------------------------------------------------------------
 st.set_page_config(page_title="Hotel Cancellation Prediction", layout="wide")
 alt.data_transformers.disable_max_rows()
@@ -91,49 +90,26 @@ with st.expander("🎯 Tujuan", expanded=True):
         """
 App ini dibuat untuk:
 - memahami pola pembatalan booking hotel,
-- mengubah data booking ke room-level,
-- melakukan feature engineering,
+- mengubah booking ke room-level,
+- membuat feature engineering,
 - membandingkan model klasifikasi,
 - melihat feature importance dan PDP,
-- serta mensimulasikan probabilitas cancel untuk booking baru.
+- dan melakukan simulasi probabilitas cancel untuk booking baru.
 """
     )
 
 
 # ---------------------------------------------------------------------
-# HELPERS
+# HELPERS - LOAD / CLEAN / STATE
 # ---------------------------------------------------------------------
-def load_data(uploaded_file, repo_path: str | None):
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-        source = "upload"
-    else:
-        if not repo_path:
-            return None, None
-        df = pd.read_csv(repo_path)
-        source = "repo"
-    return df, source
+@st.cache_data(show_spinner=True)
+def read_csv_cached(file_bytes=None, repo_path=None, source="upload"):
+    if source == "upload":
+        return pd.read_csv(io.BytesIO(file_bytes))
+    return pd.read_csv(repo_path)
 
 
-def _signature(df_in: pd.DataFrame):
-    idx = df_in.index.to_numpy()
-    head = tuple(idx[:5].tolist()) if len(idx) else ()
-    tail = tuple(idx[-5:].tolist()) if len(idx) else ()
-    return (len(df_in), head, tail)
-
-
-def _safe_metric(x, pct=False):
-    if x is None:
-        return "N/A"
-    try:
-        v = float(x)
-        if np.isnan(v):
-            return "N/A"
-        return f"{v*100:.2f}%" if pct else f"{v:.4f}"
-    except Exception:
-        return "N/A"
-
-
+@st.cache_data(show_spinner=True)
 def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out.columns = [c.strip() for c in out.columns]
@@ -167,6 +143,38 @@ def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _signature(df_in: pd.DataFrame):
+    idx = df_in.index.to_numpy()
+    head = tuple(idx[:5].tolist()) if len(idx) else ()
+    tail = tuple(idx[-5:].tolist()) if len(idx) else ()
+    return (len(df_in), head, tail)
+
+
+def clear_downstream_state(clear_loaded_data: bool = False):
+    keys = [
+        "df_room",
+        "df_model",
+        "X_train",
+        "X_test",
+        "y_train",
+        "y_test",
+        "cmp",
+        "best_name",
+        "best_pipe",
+        "model_map",
+        "fi_intrinsic",
+        "fi_perm",
+        "pdp_candidates",
+        "sig_f_prev",
+        "proc_sig",
+    ]
+    if clear_loaded_data:
+        keys += ["df_raw", "df_clean", "data_source"]
+
+    for k in keys:
+        st.session_state.pop(k, None)
+
+
 def apply_global_filters(df: pd.DataFrame, filter_cols: list[str], selections: dict[str, list]):
     out = df.copy()
     for c in filter_cols:
@@ -176,6 +184,9 @@ def apply_global_filters(df: pd.DataFrame, filter_cols: list[str], selections: d
     return out
 
 
+# ---------------------------------------------------------------------
+# ROOM SPLIT + FEATURE ENGINEERING
+# ---------------------------------------------------------------------
 def split_rooms_cap4(row: pd.Series) -> list[dict]:
     adults = int(row.get("adults", 0) or 0)
     children = int(row.get("children", 0) or 0)
@@ -228,6 +239,7 @@ def split_rooms_cap4(row: pd.Series) -> list[dict]:
     return out
 
 
+@st.cache_data(show_spinner=True)
 def build_room_level_dataset(df: pd.DataFrame) -> pd.DataFrame:
     records = []
     for _, row in df.iterrows():
@@ -250,6 +262,7 @@ def build_room_level_dataset(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+@st.cache_data(show_spinner=True)
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
@@ -292,7 +305,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         out["lead_time_bin"] = pd.cut(
             out["lead_time"],
             bins=[-1, 7, 30, 90, 180, 9999],
-            labels=["≤7d", "8–30d", "31–90d", "91–180d", ">180d"],
+            labels=["<=7d", "8-30d", "31-90d", "91-180d", ">180d"],
         )
 
     if "adr" in out.columns:
@@ -325,6 +338,9 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# ---------------------------------------------------------------------
+# MODEL HELPERS
+# ---------------------------------------------------------------------
 def prepare_model_data(df: pd.DataFrame):
     target = "is_canceled"
     if target not in df.columns:
@@ -335,13 +351,7 @@ def prepare_model_data(df: pd.DataFrame):
     train_df = df[df["reservation_status_date"] < "2019-01-01"].copy()
     test_df = df[df["reservation_status_date"] >= "2019-01-01"].copy()
 
-    drop_cols = [
-        target,
-        "Invoice_ID",
-        "bookingID",
-        "reservation_status_date",
-        "reservation_status",
-    ]
+    drop_cols = [target, "Invoice_ID", "bookingID", "reservation_status_date", "reservation_status"]
 
     X_train = train_df.drop(columns=[c for c in drop_cols if c in train_df.columns], errors="ignore")
     y_train = train_df[target].astype(int)
@@ -361,7 +371,7 @@ def make_preprocessor(X: pd.DataFrame):
     num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = X.select_dtypes(include=["object", "string", "category", "bool"]).columns.tolist()
 
-    preprocessor = ColumnTransformer(
+    return ColumnTransformer(
         transformers=[
             (
                 "num",
@@ -382,7 +392,6 @@ def make_preprocessor(X: pd.DataFrame):
         ],
         remainder="drop",
     )
-    return preprocessor
 
 
 def evaluate_classifier(pipe, X_test, y_test, threshold=0.5):
@@ -399,6 +408,7 @@ def evaluate_classifier(pipe, X_test, y_test, threshold=0.5):
     }
 
 
+@st.cache_resource(show_spinner=True)
 def train_all_models(X_train, y_train, X_test, y_test):
     preprocessor = make_preprocessor(X_train)
     cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
@@ -410,15 +420,15 @@ def train_all_models(X_train, y_train, X_test, y_test):
                 ("preprocess", preprocessor),
                 ("model", LogisticRegression(max_iter=2000, solver="liblinear", class_weight="balanced", random_state=42)),
             ]),
-            {"model__C": [0.5, 1.0, 2.0]},
+            {"model__C": [1.0]},
         ),
         (
             "Random Forest",
             Pipeline([
                 ("preprocess", preprocessor),
-                ("model", RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1, class_weight="balanced_subsample")),
+                ("model", RandomForestClassifier(n_estimators=150, max_depth=12, random_state=42, n_jobs=-1, class_weight="balanced_subsample")),
             ]),
-            {"model__max_depth": [8, 12, None], "model__min_samples_leaf": [1, 3]},
+            {"model__min_samples_leaf": [1]},
         ),
     ]
 
@@ -428,9 +438,9 @@ def train_all_models(X_train, y_train, X_test, y_test):
                 "LightGBM",
                 Pipeline([
                     ("preprocess", preprocessor),
-                    ("model", LGBMClassifier(n_estimators=200, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=-1)),
+                    ("model", LGBMClassifier(n_estimators=150, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=-1)),
                 ]),
-                {"model__num_leaves": [31, 63], "model__min_child_samples": [20, 40]},
+                {"model__num_leaves": [31]},
             )
         )
 
@@ -507,12 +517,13 @@ def get_intrinsic_importance(pipe: Pipeline):
     return None
 
 
+@st.cache_data(show_spinner=True)
 def get_permutation_importance(pipe: Pipeline, X_test: pd.DataFrame, y_test: pd.Series):
     r = permutation_importance(
         pipe,
         X_test,
         y_test,
-        n_repeats=5,
+        n_repeats=3,
         random_state=42,
         n_jobs=-1,
         scoring="average_precision",
@@ -523,7 +534,8 @@ def get_permutation_importance(pipe: Pipeline, X_test: pd.DataFrame, y_test: pd.
     return out.sort_values("perm_importance", ascending=False).reset_index(drop=True)
 
 
-def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: int = 30):
+@st.cache_data(show_spinner=True)
+def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: int = 25):
     s = pd.to_numeric(X_ref[feat], errors="coerce")
     vals = np.linspace(s.quantile(0.05), s.quantile(0.95), grid_size)
     pdp_vals = []
@@ -537,11 +549,7 @@ def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: in
 def ensure_processed_data(df_filtered: pd.DataFrame):
     sig = _signature(df_filtered)
     if st.session_state.get("proc_sig") != sig:
-        for k in [
-            "df_room", "df_model", "X_train", "X_test", "y_train", "y_test", "cmp",
-            "best_name", "best_pipe", "model_map", "fi_intrinsic", "fi_perm", "pdp_candidates"
-        ]:
-            st.session_state.pop(k, None)
+        clear_downstream_state(clear_loaded_data=False)
         st.session_state["proc_sig"] = sig
 
     if "df_room" not in st.session_state:
@@ -572,38 +580,74 @@ def ensure_modeling(df_filtered: pd.DataFrame):
 
 
 # ---------------------------------------------------------------------
-# SIDEBAR - DATA SOURCE
+# SIDEBAR - DATA SOURCE (MANUAL SUBMIT)
 # ---------------------------------------------------------------------
 with st.sidebar:
     st.header("Data source")
-    source_choice = st.radio("Choose", ["Upload file (CSV)", "Repo file (path)"], key="src_choice")
+    with st.form("data_loader_form"):
+        source_choice = st.radio("Choose", ["Upload file (CSV)", "Repo file (path)"], key="src_choice")
 
-    uploaded = None
-    repo_path = None
-    if source_choice == "Upload file (CSV)":
-        uploaded = st.file_uploader("Upload CSV", type=["csv"], key="uploader_csv_hotel")
-    else:
-        repo_path = st.text_input("Path (contoh: raw_data/train.csv)", value="", key="repo_path_hotel")
+        uploaded = None
+        repo_path = None
+        if source_choice == "Upload file (CSV)":
+            uploaded = st.file_uploader("Upload CSV", type=["csv"], key="uploader_csv_hotel")
+        else:
+            repo_path = st.text_input("Path (contoh: raw_data/train.csv)", value="", key="repo_path_hotel")
 
+        load_btn = st.form_submit_button("Load data")
 
-df_raw, src = load_data(uploaded, repo_path)
-if df_raw is None:
-    st.info("Upload CSV atau isi path repo dulu.")
+if load_btn:
+    clear_downstream_state(clear_loaded_data=True)
+    try:
+        if source_choice == "Upload file (CSV)":
+            if uploaded is None:
+                st.sidebar.warning("Upload CSV dulu.")
+            else:
+                file_bytes = uploaded.getvalue()
+                st.session_state["df_raw"] = read_csv_cached(file_bytes=file_bytes, source="upload")
+                st.session_state["data_source"] = "upload"
+                st.sidebar.success("Data berhasil di-load dari upload.")
+        else:
+            if not repo_path.strip():
+                st.sidebar.warning("Isi path file dulu.")
+            else:
+                st.session_state["df_raw"] = read_csv_cached(repo_path=repo_path.strip(), source="repo")
+                st.session_state["data_source"] = "repo"
+                st.sidebar.success("Data berhasil di-load dari repo path.")
+    except Exception as e:
+        st.sidebar.error(f"Gagal load data: {e}")
+
+if "df_raw" not in st.session_state:
+    st.info("Upload CSV atau isi path file, lalu klik **Load data**.")
     st.stop()
 
-df = basic_clean(df_raw)
+if "df_clean" not in st.session_state:
+    st.session_state["df_clean"] = basic_clean(st.session_state["df_raw"])
+
+
+df = st.session_state["df_clean"]
+src = st.session_state.get("data_source", "unknown")
 
 
 # ---------------------------------------------------------------------
-# SIDEBAR - FILTERS
+# SIDEBAR - GLOBAL FILTERS
 # ---------------------------------------------------------------------
 with st.sidebar:
     st.header("Global filters")
+
     filter_candidates = []
     preferred = [
-        "hotel", "arrival_date_month", "market_segment", "distribution_channel",
-        "deposit_type", "customer_type", "country", "meal", "reserved_room_type"
+        "hotel",
+        "arrival_date_month",
+        "market_segment",
+        "distribution_channel",
+        "deposit_type",
+        "customer_type",
+        "country",
+        "meal",
+        "reserved_room_type",
     ]
+
     for c in preferred:
         if c in df.columns:
             filter_candidates.append(c)
@@ -612,7 +656,13 @@ with st.sidebar:
             filter_candidates.append(c)
 
     default_filter_cols = [c for c in ["hotel", "arrival_date_month", "market_segment"] if c in filter_candidates]
-    filter_cols = st.multiselect("Pilih kolom filter", options=filter_candidates, default=default_filter_cols, key="hotel_filter_cols")
+
+    filter_cols = st.multiselect(
+        "Pilih kolom filter",
+        options=filter_candidates,
+        default=default_filter_cols,
+        key="hotel_filter_cols",
+    )
 
     filter_selections = {}
     for c in filter_cols:
@@ -621,17 +671,12 @@ with st.sidebar:
 
 
 df_f = apply_global_filters(df, filter_cols, filter_selections)
-
 st.caption(f"Sumber data: **{src}** | Rows aktif setelah filter: **{len(df_f):,}**")
 
 sig_f = _signature(df_f)
 if st.session_state.get("sig_f_prev") != sig_f:
     st.session_state["sig_f_prev"] = sig_f
-    for k in [
-        "df_room", "df_model", "X_train", "X_test", "y_train", "y_test", "cmp",
-        "best_name", "best_pipe", "model_map", "fi_intrinsic", "fi_perm", "pdp_candidates"
-    ]:
-        st.session_state.pop(k, None)
+    clear_downstream_state(clear_loaded_data=False)
 
 
 # ---------------------------------------------------------------------
@@ -663,7 +708,8 @@ Proyek ini menjawab beberapa hal utama:
 2. mengubah booking-level menjadi room-level,
 3. membuat feature engineering yang relevan,
 4. membandingkan beberapa model klasifikasi,
-5. dan memberi alat simulasi probabilitas cancel untuk keputusan bisnis.
+5. memberi feature importance dan PDP,
+6. dan memberi alat simulasi booking baru.
 """
     )
 
@@ -739,9 +785,7 @@ with tab_understanding:
 # ---------------------------------------------------------------------
 with tab_clean_split:
     st.subheader("Cleaning & Split Room")
-    run_split = st.button("Run cleaning + split room", key="btn_split_hotel")
-
-    if run_split:
+    if st.button("Run cleaning + split room", key="btn_split_hotel"):
         ensure_processed_data(df_f)
         st.success("Cleaning + split room selesai.")
 
@@ -755,12 +799,7 @@ with tab_clean_split:
         with b:
             split_summary = pd.DataFrame(
                 {
-                    "metric": [
-                        "rows after split",
-                        "unique bookingID",
-                        "avg rooms per booking",
-                        "bulk 3+ rooms",
-                    ],
+                    "metric": ["rows after split", "unique bookingID", "avg rooms per booking", "bulk 3+ rooms"],
                     "value": [
                         len(df_room),
                         df_room["bookingID"].nunique() if "bookingID" in df_room.columns else np.nan,
@@ -800,8 +839,7 @@ with tab_clean_split:
 # ---------------------------------------------------------------------
 with tab_eda:
     st.subheader("EDA interaktif")
-    run_eda_prep = st.button("Prepare data for EDA", key="btn_eda_hotel")
-    if run_eda_prep:
+    if st.button("Prepare data for EDA", key="btn_eda_hotel"):
         ensure_processed_data(df_f)
         st.success("Data EDA siap.")
 
@@ -869,11 +907,7 @@ with tab_eda:
                     x=alt.X(f"{num_sel}:Q", title=num_sel),
                     y=alt.Y("adr:Q", title="ADR"),
                     color=alt.Color("is_canceled:N", title="Canceled"),
-                    tooltip=[
-                        alt.Tooltip(f"{num_sel}:Q", format=".2f"),
-                        alt.Tooltip("adr:Q", format=".2f"),
-                        "is_canceled:N",
-                    ],
+                    tooltip=[alt.Tooltip(f"{num_sel}:Q", format=".2f"), alt.Tooltip("adr:Q", format=".2f"), "is_canceled:N"],
                 )
                 .properties(height=350)
                 .interactive()
@@ -888,8 +922,7 @@ with tab_eda:
 # ---------------------------------------------------------------------
 with tab_fe:
     st.subheader("Feature Engineering")
-    run_fe = st.button("Run feature engineering", key="btn_fe_hotel")
-    if run_fe:
+    if st.button("Run feature engineering", key="btn_fe_hotel"):
         ensure_processed_data(df_f)
         st.success("Feature engineering selesai.")
 
@@ -898,14 +931,8 @@ with tab_fe:
         num_cols = df_model.select_dtypes(include=[np.number]).columns.tolist()
         cat_cols = df_model.select_dtypes(include=["object", "string", "category", "bool"]).columns.tolist()
 
-        st.write(
-            "**Contoh fitur numerik baru**",
-            [c for c in ["minors", "party_size", "stay_nights", "weekend_ratio", "room_revenue", "booking_revenue"] if c in num_cols],
-        )
-        st.write(
-            "**Contoh fitur kategori/flag baru**",
-            [c for c in ["season", "lead_time_bin", "adr_bin", "family_flag", "couple_flag", "solo_flag", "waiting_list_flag", "req_flag", "car_flag", "room_mismatch_flag", "changes_flag"] if c in df_model.columns],
-        )
+        st.write("**Contoh fitur numerik baru**", [c for c in ["minors", "party_size", "stay_nights", "weekend_ratio", "room_revenue", "booking_revenue"] if c in num_cols])
+        st.write("**Contoh fitur kategori/flag baru**", [c for c in ["season", "lead_time_bin", "adr_bin", "family_flag", "couple_flag", "solo_flag", "waiting_list_flag", "req_flag", "car_flag", "room_mismatch_flag", "changes_flag"] if c in df_model.columns])
 
         fe_summary = pd.DataFrame(
             {
@@ -923,8 +950,7 @@ with tab_fe:
 # ---------------------------------------------------------------------
 with tab_model:
     st.subheader("Modeling + Tuning via CV")
-    run_modeling = st.button("Run modeling", key="btn_model_hotel")
-    if run_modeling:
+    if st.button("Run modeling", key="btn_model_hotel"):
         ensure_modeling(df_f)
         st.success("Modeling selesai.")
 
@@ -939,11 +965,7 @@ with tab_model:
                 show_cmp[c] = show_cmp[c].round(4)
         st.dataframe(show_cmp, use_container_width=True)
 
-        metric_pick = st.selectbox(
-            "Pilih metrik model comparison",
-            options=["roc_auc", "pr_auc", "brier", "logloss", "precision", "recall", "f1"],
-            key="metric_pick_hotel",
-        )
+        metric_pick = st.selectbox("Pilih metrik model comparison", options=["roc_auc", "pr_auc", "brier", "logloss", "precision", "recall", "f1"], key="metric_pick_hotel")
         plot_df = show_cmp[["model", metric_pick]].copy()
         sort_rule = "-x" if metric_pick in ["roc_auc", "pr_auc", "precision", "recall", "f1"] else "x"
         cmp_chart = (
@@ -1015,7 +1037,7 @@ with tab_imp:
                 alt.Chart(fi_perm.head(20))
                 .mark_bar()
                 .encode(
-                    x=alt.X("perm_importance:Q", title="Δ Average Precision"),
+                    x=alt.X("perm_importance:Q", title="Delta Average Precision"),
                     y=alt.Y("feature:N", sort="-x"),
                     tooltip=["feature", alt.Tooltip("perm_importance:Q", format=".6f")],
                 )
@@ -1028,7 +1050,7 @@ with tab_imp:
         st.markdown("### PDP")
         ensure_modeling(df_f)
         feat_pdp = st.selectbox("Pilih fitur numerik untuk PDP", options=st.session_state["pdp_candidates"], key="pdp_feature_hotel")
-        pdp_df = compute_pdp_1d(st.session_state["best_pipe"], st.session_state["X_test"].copy(), feat_pdp, grid_size=40)
+        pdp_df = compute_pdp_1d(st.session_state["best_pipe"], st.session_state["X_test"].copy(), feat_pdp, grid_size=30)
         pdp_chart = (
             alt.Chart(pdp_df)
             .mark_line(point=True)
@@ -1037,7 +1059,7 @@ with tab_imp:
                 y=alt.Y("pred_prob:Q", title="Predicted cancel probability"),
                 tooltip=[alt.Tooltip(feat_pdp, format=".3f"), alt.Tooltip("pred_prob:Q", format=".4f")],
             )
-            .properties(height=350, title=f"PDP — {feat_pdp}")
+            .properties(height=350, title=f"PDP - {feat_pdp}")
             .interactive()
         )
         st.altair_chart(pdp_chart, use_container_width=True)
@@ -1051,8 +1073,7 @@ with tab_imp:
 # ---------------------------------------------------------------------
 with tab_sim:
     st.subheader("Booking Cancellation Simulator")
-    prep_sim = st.button("Prepare simulator", key="btn_sim_hotel")
-    if prep_sim:
+    if st.button("Prepare simulator", key="btn_sim_hotel"):
         ensure_modeling(df_f)
         st.success("Simulator siap.")
 
