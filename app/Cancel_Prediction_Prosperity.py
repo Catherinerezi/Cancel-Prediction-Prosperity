@@ -48,7 +48,10 @@ def _apply_altair_theme():
             "legend": {"labelLimit": 260},
         }
     }
-    alt.themes.register("hotel_manual_app_theme", lambda: theme)
+    try:
+        alt.themes.register("hotel_manual_app_theme", lambda: theme)
+    except Exception:
+        pass
     alt.themes.enable("hotel_manual_app_theme")
 
 
@@ -124,7 +127,6 @@ if load_btn:
 if "df_raw" not in st.session_state:
     st.info("Upload file CSV kamu sendiri dari sidebar, lalu klik **Load data**.")
     st.stop()
-
 
 df_raw = st.session_state["df_raw"]
 st.caption(f"Rows loaded: **{len(df_raw):,}**")
@@ -415,7 +417,7 @@ def get_intrinsic_importance(pipe: Pipeline) -> pd.DataFrame | None:
     return None
 
 
-@st.cache_data(show_spinner=False)
+# FIX: jangan cache function yang menerima sklearn Pipeline/model
 def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: int = 20) -> pd.DataFrame:
     s = pd.to_numeric(X_ref[feat], errors="coerce")
     vals = np.linspace(s.quantile(0.05), s.quantile(0.95), grid_size)
