@@ -26,7 +26,6 @@ from sklearn.metrics import (
     confusion_matrix,
 )
 
-
 # ============================================================
 # PAGE CONFIG
 # ============================================================
@@ -49,10 +48,10 @@ def _apply_altair_theme():
         }
     }
     try:
-        alt.themes.register("hotel_manual_app_theme", lambda: theme)
+        alt.themes.register("hotel_manual_app_theme_v2", lambda: theme)
     except Exception:
         pass
-    alt.themes.enable("hotel_manual_app_theme")
+    alt.themes.enable("hotel_manual_app_theme_v2")
 
 
 _apply_altair_theme()
@@ -69,9 +68,8 @@ App ini mengikuti aturan eksekusi manual penuh:
 """
     )
 
-
 # ============================================================
-# STATE HELPERS
+# HELPERS
 # ============================================================
 def reset_pipeline_state(clear_data: bool = False) -> None:
     keys = [
@@ -87,6 +85,7 @@ def reset_pipeline_state(clear_data: bool = False) -> None:
         "model_metrics",
         "fi_intrinsic",
         "pdp_candidates",
+        "split_preview_before",
     ]
     if clear_data:
         keys += ["df_raw"]
@@ -94,47 +93,23 @@ def reset_pipeline_state(clear_data: bool = False) -> None:
         st.session_state.pop(key, None)
 
 
-# ============================================================
-# FILE LOAD - MANUAL ONLY
-# ============================================================
 @st.cache_data(show_spinner=False)
 def read_uploaded_csv(file_bytes: bytes) -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(file_bytes), low_memory=False)
 
 
-with st.sidebar:
-    st.header("Data source")
-    with st.form("upload_form"):
-        uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="manual_upload_csv")
-        load_btn = st.form_submit_button("Load data")
-
-    st.header("Manual limits")
-    preview_rows = st.number_input("Preview rows", min_value=20, max_value=5000, value=300, step=20)
-    split_rows = st.number_input("Rows for split room", min_value=20, max_value=5000, value=300, step=20)
-    model_rows = st.number_input("Rows for modeling", min_value=100, max_value=5000, value=1000, step=50)
-
-if load_btn:
-    reset_pipeline_state(clear_data=True)
-    if uploaded_file is None:
-        st.sidebar.warning("Upload CSV dulu.")
-    else:
-        try:
-            st.session_state["df_raw"] = read_uploaded_csv(uploaded_file.getvalue())
-            st.sidebar.success("Data loaded.")
-        except Exception as e:
-            st.sidebar.error(f"Gagal load data: {e}")
-
-if "df_raw" not in st.session_state:
-    st.info("Upload file CSV kamu sendiri dari sidebar, lalu klik **Load data**.")
-    st.stop()
-
-df_raw = st.session_state["df_raw"]
-st.caption(f"Rows loaded: **{len(df_raw):,}**")
+def get_categorical_cols(df: pd.DataFrame) -> list[str]:
+    cols = []
+    for c in df.columns:
+        if str(df[c].dtype) in ["object", "string", "category", "bool"]:
+            cols.append(c)
+    return cols
 
 
-# ============================================================
-# TRANSFORM HELPERS - MANUAL EXECUTION ONLY
-# ============================================================
+def get_numeric_cols(df: pd.DataFrame) -> list[str]:
+    return df.select_dtypes(include=[np.number]).columns.tolist()
+
+
 @st.cache_data(show_spinner=False)
 def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
@@ -149,7 +124,9 @@ def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     if "reservation_status_date" in out.columns:
-        out["reservation_status_date"] = pd.to_datetime(out["reservation_status_date"], errors="coerce")
+        out["reservation_status_date"] = pd.to_datetime(
+            out["reservation_status_date"], errors="coerce"
+        )
 
     for c in ["agent", "country", "children"]:
         if c in out.columns:
@@ -162,7 +139,11 @@ def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
                     out[c] = out[c].fillna(m.iat[0])
 
     if "is_canceled" in out.columns:
-        out["is_canceled"] = pd.to_numeric(out["is_canceled"], errors="coerce").fillna(0).astype(int)
+        out["is_canceled"] = (
+            pd.to_numeric(out["is_canceled"], errors="coerce")
+            .fillna(0)
+            .astype(int)
+        )
 
     return out
 
@@ -248,7 +229,11 @@ def build_room_level_dataset(df: pd.DataFrame, max_rows: int = 300) -> pd.DataFr
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
-    for c in ["children", "babies", "adults", "stays_in_week_nights", "stays_in_weekend_nights", "adr", "lead_time"]:
+    for c in [
+        "children", "babies", "adults",
+        "stays_in_week_nights", "stays_in_weekend_nights",
+        "adr", "lead_time"
+    ]:
         if c in out.columns:
             out[c] = pd.to_numeric(out[c], errors="coerce")
 
@@ -259,7 +244,11 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     if {"stays_in_week_nights", "stays_in_weekend_nights"}.issubset(out.columns):
         out["stay_nights"] = out["stays_in_week_nights"].fillna(0) + out["stays_in_weekend_nights"].fillna(0)
     if {"stays_in_weekend_nights", "stay_nights"}.issubset(out.columns):
-        out["weekend_ratio"] = np.where(out["stay_nights"] > 0, out["stays_in_weekend_nights"] / out["stay_nights"], 0.0)
+        out["weekend_ratio"] = np.where(
+            out["stay_nights"] > 0,
+            out["stays_in_weekend_nights"] / out["stay_nights"],
+            0.0
+        )
     if {"adr", "stay_nights"}.issubset(out.columns):
         out["room_revenue"] = out["adr"].fillna(0) * out["stay_nights"].fillna(0)
     if {"bookingID", "room_revenue"}.issubset(out.columns):
@@ -286,7 +275,11 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
 
     if "adr" in out.columns:
         try:
-            out["adr_bin"] = pd.qcut(out["adr"].rank(method="first"), q=5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"])
+            out["adr_bin"] = pd.qcut(
+                out["adr"].rank(method="first"),
+                q=5,
+                labels=["Q1", "Q2", "Q3", "Q4", "Q5"]
+            )
         except Exception:
             out["adr_bin"] = "Q3"
 
@@ -300,12 +293,9 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# ============================================================
-# MODEL HELPERS
-# ============================================================
 def make_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
-    num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
-    cat_cols = X.select_dtypes(include=["object", "string", "category", "bool"]).columns.tolist()
+    num_cols = get_numeric_cols(X)
+    cat_cols = get_categorical_cols(X)
 
     try:
         ohe = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
@@ -417,7 +407,7 @@ def get_intrinsic_importance(pipe: Pipeline) -> pd.DataFrame | None:
     return None
 
 
-# FIX: jangan cache function yang menerima sklearn Pipeline/model
+# no cache here because sklearn Pipeline is unhashable for cache_data
 def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: int = 20) -> pd.DataFrame:
     s = pd.to_numeric(X_ref[feat], errors="coerce")
     vals = np.linspace(s.quantile(0.05), s.quantile(0.95), grid_size)
@@ -428,6 +418,38 @@ def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: in
         pdp_vals.append(pipe.predict_proba(temp)[:, 1].mean())
     return pd.DataFrame({feat: vals, "pred_prob": pdp_vals})
 
+
+# ============================================================
+# SIDEBAR - LOAD ONLY
+# ============================================================
+with st.sidebar:
+    st.header("Data source")
+    with st.form("upload_form"):
+        uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="manual_upload_csv")
+        load_btn = st.form_submit_button("Load data")
+
+    st.header("Manual limits")
+    preview_rows = st.number_input("Preview rows", min_value=20, max_value=5000, value=300, step=20)
+    split_rows = st.number_input("Rows for split room", min_value=20, max_value=5000, value=300, step=20)
+    model_rows = st.number_input("Rows for modeling", min_value=100, max_value=5000, value=1000, step=50)
+
+if load_btn:
+    reset_pipeline_state(clear_data=True)
+    if uploaded_file is None:
+        st.sidebar.warning("Upload CSV dulu.")
+    else:
+        try:
+            st.session_state["df_raw"] = read_uploaded_csv(uploaded_file.getvalue())
+            st.sidebar.success("Data loaded.")
+        except Exception as e:
+            st.sidebar.error(f"Gagal load data: {e}")
+
+if "df_raw" not in st.session_state:
+    st.info("Upload file CSV kamu sendiri dari sidebar, lalu klik **Load data**.")
+    st.stop()
+
+df_raw = st.session_state["df_raw"]
+st.caption(f"Rows loaded: **{len(df_raw):,}**")
 
 # ============================================================
 # TABS
@@ -445,28 +467,110 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
     ]
 )
 
-
 # ============================================================
-# TAB 1 - OVERVIEW
+# TAB 1 - OVERVIEW / DATA UNDERSTANDING
 # ============================================================
 with tab1:
-    st.subheader("Raw preview only")
-    st.dataframe(df_raw.head(int(preview_rows)).head(20), use_container_width=True)
-    summary = pd.DataFrame(
-        {
-            "metric": ["rows loaded", "columns", "duplicates"],
-            "value": [len(df_raw), df_raw.shape[1], int(df_raw.duplicated().sum())],
-        }
-    )
-    st.dataframe(summary, use_container_width=True)
+    st.subheader("Data Understanding")
 
+    c1, c2, c3 = st.columns([2, 2, 2])
+
+    with c1:
+        st.write("**Shape & Preview**")
+        st.write(df_raw.shape)
+        st.dataframe(df_raw.head(int(preview_rows)).head(20), use_container_width=True)
+
+    with c2:
+        st.write("**Dtypes**")
+        dtype_df = pd.DataFrame(
+            {"column": df_raw.columns, "dtype": [str(df_raw[c].dtype) for c in df_raw.columns]}
+        )
+        st.dataframe(dtype_df, use_container_width=True)
+
+    with c3:
+        st.write("**Basic Summary**")
+        summary_df = pd.DataFrame(
+            {
+                "metric": ["rows", "columns", "duplicates"],
+                "value": [len(df_raw), df_raw.shape[1], int(df_raw.duplicated().sum())],
+            }
+        )
+        st.dataframe(summary_df, use_container_width=True)
+
+    st.markdown("### Missing Value (%)")
+    missing_df = (df_raw.isna().mean() * 100).sort_values(ascending=False).round(2).reset_index()
+    missing_df.columns = ["column", "missing_pct"]
+
+    cc1, cc2 = st.columns([1, 1])
+    with cc1:
+        st.dataframe(missing_df, use_container_width=True)
+    with cc2:
+        miss_chart = (
+            alt.Chart(missing_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("missing_pct:Q", title="% Missing"),
+                y=alt.Y("column:N", sort="-x", title="Column"),
+                tooltip=["column", alt.Tooltip("missing_pct:Q", format=".2f")],
+            )
+            .properties(height=max(220, 20 * len(missing_df)))
+            .interactive()
+        )
+        st.altair_chart(miss_chart, use_container_width=True)
+
+    num_cols = get_numeric_cols(df_raw)
+    if num_cols:
+        st.markdown("### Describe (Numeric)")
+        st.dataframe(df_raw[num_cols].describe().T, use_container_width=True)
+
+    st.markdown("### Unique Count per Column")
+    uniq_df = pd.DataFrame(
+        {
+            "column": df_raw.columns,
+            "n_unique": [df_raw[c].nunique(dropna=True) for c in df_raw.columns],
+        }
+    ).sort_values("n_unique", ascending=False)
+    st.dataframe(uniq_df, use_container_width=True)
+
+    if "is_canceled" in df_raw.columns:
+        st.markdown("### Target Distribution")
+        target_df = df_raw["is_canceled"].value_counts().sort_index().reset_index()
+        target_df.columns = ["is_canceled", "count"]
+        target_df["label"] = target_df["is_canceled"].map({0: "Not Canceled", 1: "Canceled"})
+        target_chart = (
+            alt.Chart(target_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("label:N", title="Status"),
+                y=alt.Y("count:Q", title="Count"),
+                tooltip=["label", "count"],
+            )
+            .properties(height=260)
+        )
+        st.altair_chart(target_chart, use_container_width=True)
 
 # ============================================================
 # TAB 2 - CLEANING
 # ============================================================
 with tab2:
     st.subheader("Cleaning")
-    st.caption("Tidak ada cleaning otomatis. Jalankan hanya kalau kamu klik tombol.")
+    st.caption("Menampilkan kondisi sebelum cleaning dan sesudah cleaning.")
+
+    before_clean_df = pd.DataFrame(
+        {
+            "metric": ["rows", "columns", "duplicates"],
+            "value": [len(df_raw), df_raw.shape[1], int(df_raw.duplicated().sum())],
+        }
+    )
+    before_missing = (df_raw.isna().sum()).sort_values(ascending=False).reset_index()
+    before_missing.columns = ["column", "missing_count"]
+
+    st.markdown("### Before Cleaning")
+    bc1, bc2 = st.columns([1, 1])
+    with bc1:
+        st.dataframe(before_clean_df, use_container_width=True)
+    with bc2:
+        st.dataframe(before_missing, use_container_width=True)
 
     if st.button("Run cleaning", key="btn_clean"):
         cleaned = basic_clean(df_raw)
@@ -475,58 +579,154 @@ with tab2:
         st.success("Cleaning selesai.")
 
     if "df_clean" in st.session_state:
-        st.dataframe(st.session_state["df_clean"].head(20), use_container_width=True)
+        df_clean = st.session_state["df_clean"]
 
+        after_clean_df = pd.DataFrame(
+            {
+                "metric": ["rows", "columns", "duplicates"],
+                "value": [len(df_clean), df_clean.shape[1], int(df_clean.duplicated().sum())],
+            }
+        )
+        after_missing = (df_clean.isna().sum()).sort_values(ascending=False).reset_index()
+        after_missing.columns = ["column", "missing_count"]
+
+        st.markdown("### After Cleaning")
+        ac1, ac2 = st.columns([1, 1])
+        with ac1:
+            st.dataframe(after_clean_df, use_container_width=True)
+        with ac2:
+            st.dataframe(after_missing, use_container_width=True)
+
+        st.markdown("### Preview After Cleaning")
+        st.dataframe(df_clean.head(20), use_container_width=True)
 
 # ============================================================
 # TAB 3 - FILTERING
 # ============================================================
 with tab3:
     st.subheader("Filtering")
-    st.caption("Filtering juga manual. Tidak ada filter otomatis.")
+    st.caption("Hanya kolom kategorikal yang benar-benar bisa dipilih yang ditampilkan di sini.")
 
     source_df = st.session_state.get("df_clean", df_raw)
-    filter_candidates = [c for c in source_df.columns if source_df[c].dtype == "object"]
+    filter_candidates = get_categorical_cols(source_df)
 
-    with st.form("filter_form"):
-        filter_cols = st.multiselect("Pilih kolom filter", options=filter_candidates, default=[])
-        filter_selections = {}
-        for c in filter_cols:
-            opts = sorted(source_df[c].dropna().astype(str).unique().tolist())
-            filter_selections[c] = st.multiselect(c, options=opts, default=[])
-        apply_btn = st.form_submit_button("Apply filters")
+    if not filter_candidates:
+        st.info("Tidak ada kolom kategorikal yang bisa dijadikan filter.")
+    else:
+        filterable_df = pd.DataFrame(
+            {
+                "column": filter_candidates,
+                "n_unique": [source_df[c].nunique(dropna=True) for c in filter_candidates],
+            }
+        ).sort_values("n_unique")
+        st.markdown("### Kolom yang Bisa Difilter")
+        st.dataframe(filterable_df, use_container_width=True)
 
-    if apply_btn:
-        filtered = apply_filters(source_df, filter_cols, filter_selections)
-        keep_clean = st.session_state.get("df_clean")
-        reset_pipeline_state(clear_data=False)
-        if keep_clean is not None:
-            st.session_state["df_clean"] = keep_clean
-        st.session_state["df_filtered"] = filtered
-        st.success("Filter diterapkan.")
+        with st.form("filter_form"):
+            filter_cols = st.multiselect(
+                "Pilih kolom filter",
+                options=filter_candidates,
+                default=[],
+            )
+            filter_selections = {}
+            for c in filter_cols:
+                opts = sorted(source_df[c].dropna().astype(str).unique().tolist())
+                filter_selections[c] = st.multiselect(
+                    f"Value untuk {c}",
+                    options=opts,
+                    default=[],
+                )
+            apply_btn = st.form_submit_button("Apply filters")
+
+        if apply_btn:
+            filtered = apply_filters(source_df, filter_cols, filter_selections)
+            keep_clean = st.session_state.get("df_clean")
+            reset_pipeline_state(clear_data=False)
+            if keep_clean is not None:
+                st.session_state["df_clean"] = keep_clean
+            st.session_state["df_filtered"] = filtered
+            st.session_state["active_filters"] = {
+                k: v for k, v in filter_selections.items() if v
+            }
+            st.success("Filter diterapkan.")
 
     if "df_filtered" in st.session_state:
+        st.markdown("### Ringkasan Filter Aktif")
+        active_filters = st.session_state.get("active_filters", {})
+        if active_filters:
+            active_df = pd.DataFrame(
+                {
+                    "column": list(active_filters.keys()),
+                    "selected_values": [", ".join(map(str, v)) for v in active_filters.values()],
+                }
+            )
+            st.dataframe(active_df, use_container_width=True)
+        else:
+            st.info("Tidak ada value filter yang dipilih. Dataset tetap sama.")
+
         st.write(f"Rows after filter: **{len(st.session_state['df_filtered']):,}**")
         st.dataframe(st.session_state["df_filtered"].head(20), use_container_width=True)
-
 
 # ============================================================
 # TAB 4 - SPLIT ROOM
 # ============================================================
 with tab4:
     st.subheader("Split Room")
-    st.caption("Split room dibatasi oleh rows limit dan hanya jalan saat tombol diklik.")
+    st.markdown(
+        """
+Aturan split yang dipakai:
+- maksimal **4 orang per room**,
+- kalau ada **children/babies**, sistem berusaha menempatkan minimal **1 adult** di room itu,
+- data yang diproses hanya sebanyak limit **Rows for split room** di sidebar.
+"""
+    )
 
     if st.button("Run split room", key="btn_split"):
         source_df = st.session_state.get("df_filtered", st.session_state.get("df_clean", df_raw))
+        st.session_state["split_preview_before"] = source_df.head(int(split_rows)).copy()
         st.session_state["df_room"] = build_room_level_dataset(source_df, max_rows=int(split_rows))
         st.success("Split room selesai.")
 
     if "df_room" in st.session_state:
         df_room = st.session_state["df_room"]
-        st.write(f"Rows produced by split room: **{len(df_room):,}**")
+        before_split = st.session_state.get("split_preview_before")
+
+        st.markdown("### Summary Split Room")
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Rows before split (processed)", len(before_split) if before_split is not None else 0)
+        s2.metric("Rows after split", len(df_room))
+        s3.metric("Rows not processed", max(len(df_raw) - int(split_rows), 0))
+
+        if before_split is not None:
+            st.markdown("### Before Split (processed rows)")
+            st.dataframe(before_split.head(20), use_container_width=True)
+
+        st.markdown("### After Split (room-level rows)")
         st.dataframe(df_room.head(20), use_container_width=True)
 
+        if "rooms_in_booking" in df_room.columns:
+            st.markdown("### Distribusi Jumlah Room per Booking")
+            dist_df = (
+                df_room[["bookingID", "rooms_in_booking"]]
+                .drop_duplicates()
+                .groupby("rooms_in_booking")
+                .size()
+                .reset_index(name="booking_count")
+                .sort_values("rooms_in_booking")
+            )
+            dist_chart = (
+                alt.Chart(dist_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("rooms_in_booking:Q", title="Rooms in booking"),
+                    y=alt.Y("booking_count:Q", title="Number of bookings"),
+                    tooltip=["rooms_in_booking", "booking_count"],
+                )
+                .properties(height=300)
+                .interactive()
+            )
+            st.altair_chart(dist_chart, use_container_width=True)
+            st.dataframe(dist_df, use_container_width=True)
 
 # ============================================================
 # TAB 5 - EDA
@@ -569,11 +769,21 @@ with tab5:
             "deposit_type",
             "customer_type",
             "bulk_3p_rooms",
+            "season",
+            "lead_time_bin",
+            "adr_bin",
+            "family_flag",
         ] if c in eda_source.columns
     ]
     if cat_candidates and "is_canceled" in eda_source.columns:
         cat_sel = st.selectbox("Pilih kolom kategori", options=cat_candidates, key="eda_cat")
-        rate_df = eda_source.groupby(cat_sel)["is_canceled"].mean().mul(100).sort_values(ascending=False).reset_index(name="cancel_rate")
+        rate_df = (
+            eda_source.groupby(cat_sel)["is_canceled"]
+            .mean()
+            .mul(100)
+            .sort_values(ascending=False)
+            .reset_index(name="cancel_rate")
+        )
         rate_df[cat_sel] = rate_df[cat_sel].astype(str)
         rate_chart = (
             alt.Chart(rate_df)
@@ -587,7 +797,6 @@ with tab5:
             .interactive()
         )
         st.altair_chart(rate_chart, use_container_width=True)
-
 
 # ============================================================
 # TAB 6 - FEATURE ENGINEERING
@@ -615,7 +824,6 @@ with tab6:
             ] if c in df_model.columns
         ]
         st.write("Contoh fitur baru:", feature_examples)
-
 
 # ============================================================
 # TAB 7 - MODELING
@@ -650,7 +858,6 @@ with tab7:
 
         cmp = pd.DataFrame([{"model": "Logistic Regression", **m}])
         st.dataframe(cmp, use_container_width=True)
-
 
 # ============================================================
 # TAB 8 - IMPORTANCE + PDP + SIMULATOR
