@@ -653,7 +653,8 @@ Aturan split yang dipakai:
     if st.button("Run split room", key="btn_split"):
         source_df = st.session_state.get("df_filtered", st.session_state.get("df_clean", df_raw))
         st.session_state["split_preview_before"] = (
-            source_df.head(int(split_rows)).copy().reset_index(drop=False).rename(columns={"index": "source_row_id"}))
+            source_df.head(int(split_rows)).copy().reset_index(drop=False).rename(columns={"index": "source_row_id"})
+        )
         st.session_state["df_room"] = build_room_level_dataset(source_df, max_rows=int(split_rows))
         st.success("Split room selesai.")
 
@@ -669,28 +670,44 @@ Aturan split yang dipakai:
 
         st.markdown("### Bukti Row yang Benar-Benar Ter-Split")
 
-    if "was_split" in df_room.columns and df_room["was_split"].any():
-        split_only = df_room[df_room["was_split"]].copy()
+        if not isinstance(df_room, pd.DataFrame):
+            st.warning("df_room belum berbentuk DataFrame.")
+        elif "was_split" not in df_room.columns:
+            st.warning("Kolom was_split belum tersedia di hasil split.")
+        else:
+            split_only = df_room[df_room["was_split"] == True].copy()
 
-        source_df_used = st.session_state.get("split_preview_before")
-        source_ids = split_only["source_row_id"].drop_duplicates().tolist()
+            if split_only.empty:
+                st.info("Pada data yang diproses, tidak ada row yang benar-benar perlu di-split.")
+            else:
+                source_df_used = st.session_state.get("split_preview_before")
 
-        before_proof = source_df_used[source_df_used["source_row_id"].isin(source_ids)].copy()
+                if not isinstance(source_df_used, pd.DataFrame):
+                    st.warning("Data before split belum tersedia.")
+                elif "source_row_id" not in source_df_used.columns:
+                    st.warning("Kolom source_row_id tidak ditemukan pada before split.")
+                else:
+                    source_ids = split_only["source_row_id"].drop_duplicates().tolist()
+                    before_proof = source_df_used[source_df_used["source_row_id"].isin(source_ids)].copy()
 
-        st.markdown("#### Before (row asli yang ter-split)")
-        cols_before = [c for c in [
-            "source_row_id", "bookingID", "adults", "children", "babies"
-        ] if c in before_proof.columns]
-        st.dataframe(before_proof[cols_before].head(20), use_container_width=True)
+                    st.markdown("#### Before (row asli yang ter-split)")
+                    cols_before = [c for c in [
+                        "source_row_id", "bookingID", "adults", "children", "babies"
+                    ] if c in before_proof.columns]
+                    if cols_before:
+                        st.dataframe(before_proof[cols_before].head(20), use_container_width=True)
+                    else:
+                        st.info("Kolom before split yang ingin ditampilkan tidak tersedia.")
 
-        st.markdown("#### After (hasil pecahan per room)")
-        cols_after = [c for c in [
-            "source_row_id", "bookingID", "room_no", "split_room_count",
-            "adults", "children", "babies", "viol_minors_without_adult"
-        ] if c in split_only.columns]
-        st.dataframe(split_only[cols_after].head(50), use_container_width=True)
-    else:
-        st.info("Pada data yang diproses, tidak ada row yang benar-benar perlu di-split.")
+                    st.markdown("#### After (hasil pecahan per room)")
+                    cols_after = [c for c in [
+                        "source_row_id", "bookingID", "room_no", "split_room_count",
+                        "adults", "children", "babies", "viol_minors_without_adult"
+                    ] if c in split_only.columns]
+                    if cols_after:
+                        st.dataframe(split_only[cols_after].head(50), use_container_width=True)
+                    else:
+                        st.info("Kolom after split yang ingin ditampilkan tidak tersedia.")
 
         if "rooms_in_booking" in df_room.columns:
             st.markdown("### Distribusi Jumlah Room per Booking")
