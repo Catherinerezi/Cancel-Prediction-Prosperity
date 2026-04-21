@@ -26,12 +26,9 @@ from sklearn.metrics import (
     confusion_matrix,
 )
 
-# ============================================================
 # PAGE CONFIG
-# ============================================================
 st.set_page_config(page_title="Hotel Cancellation Prediction", layout="wide")
 alt.data_transformers.disable_max_rows()
-
 
 def _apply_altair_theme():
     theme = {
@@ -53,24 +50,17 @@ def _apply_altair_theme():
         pass
     alt.themes.enable("hotel_manual_app_theme_v2")
 
-
 _apply_altair_theme()
 
 st.title("🏨 Hotel Booking Cancellation Prediction")
 with st.expander("🎯 Tujuan", expanded=True):
     st.markdown(
         """
-App ini mengikuti aturan eksekusi manual penuh:
-- app startup hanya menampilkan UI,
-- tidak membaca file apa pun sebelum user upload sendiri,
-- tidak ada cleaning / filtering / split / feature engineering / modeling otomatis,
-- semua proses berat hanya jalan setelah tombol diklik.
+App ini mengikuti aturan eksekusi manual penuh dengan semua proses berat hanya jalan setelah tombol diklik.
 """
     )
 
-# ============================================================
 # HELPERS
-# ============================================================
 def reset_pipeline_state(clear_data: bool = False) -> None:
     keys = [
         "df_clean",
@@ -97,7 +87,6 @@ def reset_pipeline_state(clear_data: bool = False) -> None:
 def read_uploaded_csv(file_bytes: bytes) -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(file_bytes), low_memory=False)
 
-
 def get_categorical_cols(df: pd.DataFrame) -> list[str]:
     cols = []
     for c in df.columns:
@@ -105,10 +94,8 @@ def get_categorical_cols(df: pd.DataFrame) -> list[str]:
             cols.append(c)
     return cols
 
-
 def get_numeric_cols(df: pd.DataFrame) -> list[str]:
     return df.select_dtypes(include=[np.number]).columns.tolist()
-
 
 @st.cache_data(show_spinner=False)
 def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
@@ -147,7 +134,6 @@ def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
 
     return out
 
-
 def apply_filters(df: pd.DataFrame, filter_cols: list[str], selections: dict[str, list]) -> pd.DataFrame:
     out = df.copy()
     for c in filter_cols:
@@ -155,7 +141,6 @@ def apply_filters(df: pd.DataFrame, filter_cols: list[str], selections: dict[str
         if vals:
             out = out[out[c].astype(str).isin([str(v) for v in vals])]
     return out
-
 
 def split_rooms_cap4(row: pd.Series) -> list[dict]:
     adults = int(row.get("adults", 0) or 0)
@@ -208,7 +193,6 @@ def split_rooms_cap4(row: pd.Series) -> list[dict]:
         out.append(r)
     return out
 
-
 @st.cache_data(show_spinner=False)
 def build_room_level_dataset(df: pd.DataFrame, max_rows: int = 300) -> pd.DataFrame:
     work = df.head(max_rows).copy()
@@ -223,7 +207,6 @@ def build_room_level_dataset(df: pd.DataFrame, max_rows: int = 300) -> pd.DataFr
         out["rooms_in_booking"] = out.groupby("bookingID")["Invoice_ID"].transform("count")
         out["bulk_3p_rooms"] = out["rooms_in_booking"] >= 3
     return out
-
 
 @st.cache_data(show_spinner=False)
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -292,7 +275,6 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
 
     return out
 
-
 def make_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
     num_cols = get_numeric_cols(X)
     cat_cols = get_categorical_cols(X)
@@ -324,7 +306,6 @@ def make_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
         remainder="drop",
     )
 
-
 def prepare_model_data(df: pd.DataFrame, max_rows: int = 1000):
     target = "is_canceled"
     if target not in df.columns:
@@ -353,7 +334,6 @@ def prepare_model_data(df: pd.DataFrame, max_rows: int = 1000):
     y_test = test_df[target].astype(int)
     return X_train, X_test, y_train, y_test
 
-
 @st.cache_resource(show_spinner=False)
 def train_fast_model(X_train: pd.DataFrame, y_train: pd.Series) -> Pipeline:
     preprocessor = make_preprocessor(X_train)
@@ -363,7 +343,6 @@ def train_fast_model(X_train: pd.DataFrame, y_train: pd.Series) -> Pipeline:
     ])
     pipe.fit(X_train, y_train)
     return pipe
-
 
 def evaluate_model(pipe: Pipeline, X_test: pd.DataFrame, y_test: pd.Series, threshold: float = 0.5) -> dict:
     prob = pipe.predict_proba(X_test)[:, 1]
@@ -377,7 +356,6 @@ def evaluate_model(pipe: Pipeline, X_test: pd.DataFrame, y_test: pd.Series, thre
         "recall": recall_score(y_test, pred, zero_division=0),
         "f1": f1_score(y_test, pred, zero_division=0),
     }
-
 
 def get_feature_names(pipe: Pipeline) -> list[str]:
     ct = pipe.named_steps["preprocess"]
@@ -396,7 +374,6 @@ def get_feature_names(pipe: Pipeline) -> list[str]:
                     names.extend(list(cols))
         return names
 
-
 def get_intrinsic_importance(pipe: Pipeline) -> pd.DataFrame | None:
     model = pipe.named_steps["model"]
     feat_names = get_feature_names(pipe)
@@ -405,7 +382,6 @@ def get_intrinsic_importance(pipe: Pipeline) -> pd.DataFrame | None:
         fi = pd.DataFrame({"feature": feat_names, "importance": np.abs(coef)})
         return fi.sort_values("importance", ascending=False).reset_index(drop=True)
     return None
-
 
 # no cache here because sklearn Pipeline is unhashable for cache_data
 def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: int = 20) -> pd.DataFrame:
@@ -418,10 +394,7 @@ def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: in
         pdp_vals.append(pipe.predict_proba(temp)[:, 1].mean())
     return pd.DataFrame({feat: vals, "pred_prob": pdp_vals})
 
-
-# ============================================================
-# SIDEBAR - LOAD ONLY
-# ============================================================
+# SIDEBAR
 with st.sidebar:
     st.header("Data source")
     with st.form("upload_form"):
@@ -451,9 +424,7 @@ if "df_raw" not in st.session_state:
 df_raw = st.session_state["df_raw"]
 st.caption(f"Rows loaded: **{len(df_raw):,}**")
 
-# ============================================================
 # TABS
-# ============================================================
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
     [
         "Overview",
@@ -467,14 +438,10 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
     ]
 )
 
-# ============================================================
 # TAB 1 - OVERVIEW / DATA UNDERSTANDING
-# ============================================================
 with tab1:
     st.subheader("Data Understanding")
-
     c1, c2, c3 = st.columns([2, 2, 2])
-
     with c1:
         st.write("**Shape & Preview**")
         st.write(df_raw.shape)
@@ -549,13 +516,10 @@ with tab1:
         )
         st.altair_chart(target_chart, use_container_width=True)
 
-# ============================================================
 # TAB 2 - CLEANING
-# ============================================================
 with tab2:
     st.subheader("Cleaning")
     st.caption("Menampilkan kondisi sebelum cleaning dan sesudah cleaning.")
-
     before_clean_df = pd.DataFrame(
         {
             "metric": ["rows", "columns", "duplicates"],
@@ -600,9 +564,7 @@ with tab2:
         st.markdown("### Preview After Cleaning")
         st.dataframe(df_clean.head(20), use_container_width=True)
 
-# ============================================================
 # TAB 3 - FILTERING
-# ============================================================
 with tab3:
     st.subheader("Filtering")
     st.caption("Hanya kolom kategorikal yang benar-benar bisa dipilih yang ditampilkan di sini.")
@@ -667,9 +629,7 @@ with tab3:
         st.write(f"Rows after filter: **{len(st.session_state['df_filtered']):,}**")
         st.dataframe(st.session_state["df_filtered"].head(20), use_container_width=True)
 
-# ============================================================
 # TAB 4 - SPLIT ROOM
-# ============================================================
 with tab4:
     st.subheader("Split Room")
     st.markdown(
@@ -728,9 +688,7 @@ Aturan split yang dipakai:
             st.altair_chart(dist_chart, use_container_width=True)
             st.dataframe(dist_df, use_container_width=True)
 
-# ============================================================
 # TAB 5 - EDA
-# ============================================================
 with tab5:
     st.subheader("EDA")
     st.caption("EDA memakai data terakhir yang kamu proses manual.")
@@ -798,9 +756,7 @@ with tab5:
         )
         st.altair_chart(rate_chart, use_container_width=True)
 
-# ============================================================
 # TAB 6 - FEATURE ENGINEERING
-# ============================================================
 with tab6:
     st.subheader("Feature Engineering")
     st.caption("Feature engineering hanya jalan setelah klik tombol.")
@@ -825,9 +781,7 @@ with tab6:
         ]
         st.write("Contoh fitur baru:", feature_examples)
 
-# ============================================================
 # TAB 7 - MODELING
-# ============================================================
 with tab7:
     st.subheader("Modeling")
     st.caption("Modeling tidak jalan sebelum tombol diklik. Model cepat: Logistic Regression.")
@@ -859,9 +813,7 @@ with tab7:
         cmp = pd.DataFrame([{"model": "Logistic Regression", **m}])
         st.dataframe(cmp, use_container_width=True)
 
-# ============================================================
 # TAB 8 - IMPORTANCE + PDP + SIMULATOR
-# ============================================================
 with tab8:
     st.subheader("Importance + PDP + Simulator")
 
