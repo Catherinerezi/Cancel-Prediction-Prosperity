@@ -906,7 +906,8 @@ with tab8:
 
         prob_test = pipe.predict_proba(X_test)[:, 1]
         pred_test = (prob_test >= threshold).astype(int)
-        tn, fp, fn, tp = confusion_matrix(y_test, pred_test).ravel()
+        cm = confusion_matrix(y_test, pred_test, labels=[0, 1])
+        tn, fp, fn, tp = cm.ravel()
         diag_df = pd.DataFrame(
             {
                 "metric": ["Precision", "Recall", "F1", "TP", "FP", "FN", "TN"],
