@@ -643,7 +643,7 @@ Aturan split yang dipakai:
 
     if st.button("Run split room", key="btn_split"):
         source_df = st.session_state.get("df_filtered", st.session_state.get("df_clean", df_raw))
-        st.session_state["split_preview_before"] = source_df.head(int(split_rows)).copy()
+        st.session_state["split_preview_before"] = build_room_level_dataset(source_df, max_rows=int(split_rows)).copy()
         st.session_state["df_room"] = build_room_level_dataset(source_df, max_rows=int(split_rows))
         st.success("Split room selesai.")
 
