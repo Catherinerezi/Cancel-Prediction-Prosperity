@@ -195,17 +195,26 @@ def split_rooms_cap4(row: pd.Series) -> list[dict]:
 
 @st.cache_data(show_spinner=False)
 def build_room_level_dataset(df: pd.DataFrame, max_rows: int = 300) -> pd.DataFrame:
-    work = df.head(max_rows).copy()
+    work = df.head(max_rows).copy().reset_index(drop=False)
+    work = work.rename(columns={"index": "source_row_id"})
+
     records: list[dict] = []
     for _, row in work.iterrows():
-        records.extend(split_rooms_cap4(row))
+        split_result = split_rooms_cap4(row)
+        for i, rec in enumerate(split_result, start=1):
+            rec["room_no"] = i
+            rec["split_room_count"] = len(split_result)
+            rec["was_split"] = len(split_result) > 1
+            records.append(rec)
 
     out = pd.DataFrame(records).reset_index(drop=True)
+
     if "bookingID" in out.columns:
         out["bookingID"] = out["bookingID"].astype(str)
         out["Invoice_ID"] = np.arange(1, len(out) + 1, dtype=int)
         out["rooms_in_booking"] = out.groupby("bookingID")["Invoice_ID"].transform("count")
         out["bulk_3p_rooms"] = out["rooms_in_booking"] >= 3
+
     return out
 
 @st.cache_data(show_spinner=False)
@@ -643,7 +652,8 @@ Aturan split yang dipakai:
 
     if st.button("Run split room", key="btn_split"):
         source_df = st.session_state.get("df_filtered", st.session_state.get("df_clean", df_raw))
-        st.session_state["split_preview_before"] = build_room_level_dataset(source_df, max_rows=int(split_rows)).copy()
+        st.session_state["split_preview_before"] = (
+            source_df.head(int(split_rows)).copy().reset_index(drop=False).rename(columns={"index": "source_row_id"}))
         st.session_state["df_room"] = build_room_level_dataset(source_df, max_rows=int(split_rows))
         st.success("Split room selesai.")
 
@@ -657,12 +667,30 @@ Aturan split yang dipakai:
         s2.metric("Rows after split", len(df_room))
         s3.metric("Rows not processed", max(len(df_raw) - int(split_rows), 0))
 
-        if before_split is not None:
-            st.markdown("### Before Split (processed rows)")
-            st.dataframe(before_split.head(20), use_container_width=True)
+        st.markdown("### Bukti Row yang Benar-Benar Ter-Split")
 
-        st.markdown("### After Split (room-level rows)")
-        st.dataframe(df_room.head(20), use_container_width=True)
+    if "was_split" in df_room.columns and df_room["was_split"].any():
+        split_only = df_room[df_room["was_split"]].copy()
+
+        source_df_used = st.session_state.get("split_preview_before")
+        source_ids = split_only["source_row_id"].drop_duplicates().tolist()
+
+        before_proof = source_df_used[source_df_used["source_row_id"].isin(source_ids)].copy()
+
+        st.markdown("#### Before (row asli yang ter-split)")
+        cols_before = [c for c in [
+            "source_row_id", "bookingID", "adults", "children", "babies"
+        ] if c in before_proof.columns]
+        st.dataframe(before_proof[cols_before].head(20), use_container_width=True)
+
+        st.markdown("#### After (hasil pecahan per room)")
+        cols_after = [c for c in [
+            "source_row_id", "bookingID", "room_no", "split_room_count",
+            "adults", "children", "babies", "viol_minors_without_adult"
+        ] if c in split_only.columns]
+        st.dataframe(split_only[cols_after].head(50), use_container_width=True)
+    else:
+        st.info("Pada data yang diproses, tidak ada row yang benar-benar perlu di-split.")
 
         if "rooms_in_booking" in df_room.columns:
             st.markdown("### Distribusi Jumlah Room per Booking")
