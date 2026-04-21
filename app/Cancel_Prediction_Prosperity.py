@@ -115,6 +115,12 @@ def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
             out["reservation_status_date"], errors="coerce"
         )
 
+    # drop kolom dengan missing > 20%
+    missing_percentage = out.isna().mean() * 100
+    cols_to_drop = missing_percentage[missing_percentage > 20].index.tolist()
+    if cols_to_drop:
+        out = out.drop(columns=cols_to_drop, errors="ignore")
+
     for c in ["agent", "country", "children"]:
         if c in out.columns:
             if pd.api.types.is_numeric_dtype(out[c]):
@@ -195,7 +201,7 @@ def split_rooms_cap4(row: pd.Series) -> list[dict]:
 
 @st.cache_data(show_spinner=False)
 def build_room_level_dataset(df: pd.DataFrame, max_rows: int = 300) -> pd.DataFrame:
-    work = df.head(max_rows).copy().reset_index(drop=False)
+    work = df.copy().reset_index(drop=False)
     work = work.rename(columns={"index": "source_row_id"})
 
     records: list[dict] = []
@@ -668,6 +674,24 @@ Aturan split yang dipakai:
         s2.metric("Rows after split", len(df_room))
         s3.metric("Rows not processed", max(len(df_raw) - int(split_rows), 0))
 
+        check_df = before_split.copy()
+        check_df["total_guests"] = (
+            pd.to_numeric(check_df["adults"], errors="coerce").fillna(0)
+            + pd.to_numeric(check_df["children"], errors="coerce").fillna(0)
+            + pd.to_numeric(check_df["babies"], errors="coerce").fillna(0)
+        )
+
+        candidate_split = check_df[check_df["total_guests"] > 4].copy()
+
+        st.markdown("### Kandidat Row yang Berpotensi Ter-Split")
+        if not candidate_split.empty:
+            cols_show = [c for c in [
+                "source_row_id", "bookingID", "adults", "children", "babies", "total_guests"
+            ] if c in candidate_split.columns]
+            st.dataframe(candidate_split[cols_show].head(20), use_container_width=True)
+        else:
+            st.info("Pada row yang diproses sekarang, tidak ada total guest > 4.")
+        
         st.markdown("### Bukti Row yang Benar-Benar Ter-Split")
 
         if not isinstance(df_room, pd.DataFrame):
