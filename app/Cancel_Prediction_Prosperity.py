@@ -64,7 +64,6 @@ App ini mengikuti aturan eksekusi manual penuh dengan semua proses berat hanya j
 def reset_pipeline_state(clear_data: bool = False) -> None:
     keys = [
         "df_clean",
-        "df_filtered",
         "df_room",
         "df_model",
         "X_train",
@@ -421,6 +420,51 @@ with st.sidebar:
     split_rows = st.number_input("Rows for split room", min_value=20, max_value=5000, value=300, step=20)
     model_rows = st.number_input("Rows for modeling", min_value=100, max_value=5000, value=1000, step=50)
 
+    st.header("Global filters")
+
+    filter_source = st.session_state.get("df_clean", st.session_state.get("df_raw"))
+
+    if filter_source is not None:
+        filter_candidates = get_categorical_cols(filter_source)
+
+        default_filter_cols = [
+            c for c in [
+                "hotel",
+                "arrival_date_month",
+                "market_segment",
+                "distribution_channel",
+                "deposit_type",
+                "customer_type",
+            ] if c in filter_candidates
+        ]
+
+        with st.form("global_filter_form"):
+            selected_filter_cols = st.multiselect(
+                "Pilih kolom filter",
+                options=filter_candidates,
+                default=default_filter_cols[:2]
+            )
+
+            global_filter_selections = {}
+            for c in selected_filter_cols:
+                opts = sorted(filter_source[c].dropna().astype(str).unique().tolist())
+                global_filter_selections[c] = st.multiselect(
+                    f"Value untuk {c}",
+                    options=opts,
+                    default=[]
+                )
+
+            apply_global_filter_btn = st.form_submit_button("Apply global filters")
+            reset_global_filter_btn = st.form_submit_button("Reset global filters")
+
+        if apply_global_filter_btn:
+            st.session_state["active_filters"] = {
+                k: v for k, v in global_filter_selections.items() if v
+            }
+
+        if reset_global_filter_btn:
+            st.session_state["active_filters"] = {}
+
 if load_btn:
     reset_pipeline_state(clear_data=True)
     if uploaded_file is None:
@@ -439,12 +483,29 @@ if "df_raw" not in st.session_state:
 df_raw = st.session_state["df_raw"]
 st.caption(f"Rows loaded: **{len(df_raw):,}**")
 
+df_base = st.session_state.get("df_clean", df_raw)
+active_filters = st.session_state.get("active_filters", {})
+
+if active_filters:
+    df_active = apply_filters(df_base, list(active_filters.keys()), active_filters)
+else:
+    df_active = df_base.copy()
+
+if active_filters:
+    active_filter_text = " | ".join(
+        [f"{k}: {', '.join(map(str, v))}" for k, v in active_filters.items()]
+    )
+    st.caption(f"Active filters → {active_filter_text}")
+else:
+    st.caption("Active filters → none")
+
+st.caption(f"Rows in active dataset: **{len(df_active):,}**")
+
 # TABS
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
     [
         "Overview",
         "Cleaning",
-        "Filtering",
         "Split Room",
         "EDA",
         "Feature Engineering",
@@ -555,6 +616,7 @@ with tab2:
         cleaned = basic_clean(df_raw)
         reset_pipeline_state(clear_data=False)
         st.session_state["df_clean"] = cleaned
+        st.session_state["active_filters"] = {}
         st.success("Cleaning selesai.")
 
     if "df_clean" in st.session_state:
@@ -579,73 +641,8 @@ with tab2:
         st.markdown("### Preview After Cleaning")
         st.dataframe(df_clean.head(20), use_container_width=True)
 
-# TAB 3 - FILTERING
+# TAB 3 - SPLIT ROOM
 with tab3:
-    st.subheader("Filtering")
-    st.caption("Hanya kolom kategorikal yang benar-benar bisa dipilih yang ditampilkan di sini.")
-
-    source_df = st.session_state.get("df_clean", df_raw)
-    filter_candidates = get_categorical_cols(source_df)
-
-    if not filter_candidates:
-        st.info("Tidak ada kolom kategorikal yang bisa dijadikan filter.")
-    else:
-        filterable_df = pd.DataFrame(
-            {
-                "column": filter_candidates,
-                "n_unique": [source_df[c].nunique(dropna=True) for c in filter_candidates],
-            }
-        ).sort_values("n_unique")
-        st.markdown("### Kolom yang Bisa Difilter")
-        st.dataframe(filterable_df, use_container_width=True)
-
-        with st.form("filter_form"):
-            filter_cols = st.multiselect(
-                "Pilih kolom filter",
-                options=filter_candidates,
-                default=[],
-            )
-            filter_selections = {}
-            for c in filter_cols:
-                opts = sorted(source_df[c].dropna().astype(str).unique().tolist())
-                filter_selections[c] = st.multiselect(
-                    f"Value untuk {c}",
-                    options=opts,
-                    default=[],
-                )
-            apply_btn = st.form_submit_button("Apply filters")
-
-        if apply_btn:
-            filtered = apply_filters(source_df, filter_cols, filter_selections)
-            keep_clean = st.session_state.get("df_clean")
-            reset_pipeline_state(clear_data=False)
-            if keep_clean is not None:
-                st.session_state["df_clean"] = keep_clean
-            st.session_state["df_filtered"] = filtered
-            st.session_state["active_filters"] = {
-                k: v for k, v in filter_selections.items() if v
-            }
-            st.success("Filter diterapkan.")
-
-    if "df_filtered" in st.session_state:
-        st.markdown("### Ringkasan Filter Aktif")
-        active_filters = st.session_state.get("active_filters", {})
-        if active_filters:
-            active_df = pd.DataFrame(
-                {
-                    "column": list(active_filters.keys()),
-                    "selected_values": [", ".join(map(str, v)) for v in active_filters.values()],
-                }
-            )
-            st.dataframe(active_df, use_container_width=True)
-        else:
-            st.info("Tidak ada value filter yang dipilih. Dataset tetap sama.")
-
-        st.write(f"Rows after filter: **{len(st.session_state['df_filtered']):,}**")
-        st.dataframe(st.session_state["df_filtered"].head(20), use_container_width=True)
-
-# TAB 4 - SPLIT ROOM
-with tab4:
     st.subheader("Split Room")
     st.markdown(
         """
@@ -657,7 +654,7 @@ Aturan split yang dipakai:
     )
 
     if st.button("Run split room", key="btn_split"):
-        source_df = st.session_state.get("df_filtered", st.session_state.get("df_clean", df_raw))
+        source_df = df_active.copy()
         st.session_state["split_preview_before"] = (
             source_df.head(int(split_rows)).copy().reset_index(drop=False).rename(columns={"index": "source_row_id"})
         )
@@ -757,19 +754,15 @@ Aturan split yang dipakai:
             st.altair_chart(dist_chart, use_container_width=True)
             st.dataframe(dist_df, use_container_width=True)
 
-# TAB 5 - EDA
-with tab5:
+# TAB 4 - EDA
+with tab4:
     st.subheader("EDA")
     st.caption("EDA memakai data terakhir yang kamu proses manual.")
 
     if "df_room" in st.session_state:
         eda_source = st.session_state["df_room"]
-    elif "df_filtered" in st.session_state:
-        eda_source = st.session_state["df_filtered"]
-    elif "df_clean" in st.session_state:
-        eda_source = st.session_state["df_clean"]
     else:
-        eda_source = df_raw
+        eda_source = df_active.copy()
 
     if "is_canceled" in eda_source.columns:
         target_df = eda_source["is_canceled"].value_counts().sort_index().reset_index()
@@ -825,8 +818,8 @@ with tab5:
         )
         st.altair_chart(rate_chart, use_container_width=True)
 
-# TAB 6 - FEATURE ENGINEERING
-with tab6:
+# TAB 5 - FEATURE ENGINEERING
+with tab5:
     st.subheader("Feature Engineering")
     st.caption("Feature engineering hanya jalan setelah klik tombol.")
 
@@ -850,8 +843,8 @@ with tab6:
         ]
         st.write("Contoh fitur baru:", feature_examples)
 
-# TAB 7 - MODELING
-with tab7:
+# TAB 6 - MODELING
+with tab6:
     st.subheader("Modeling")
     st.caption("Modeling tidak jalan sebelum tombol diklik. Model cepat: Logistic Regression.")
 
@@ -882,8 +875,8 @@ with tab7:
         cmp = pd.DataFrame([{"model": "Logistic Regression", **m}])
         st.dataframe(cmp, use_container_width=True)
 
-# TAB 8 - IMPORTANCE + PDP + SIMULATOR
-with tab8:
+# TAB 7 - IMPORTANCE + PDP + SIMULATOR
+with tab7:
     st.subheader("Importance + PDP + Simulator")
 
     left, right = st.columns(2)
