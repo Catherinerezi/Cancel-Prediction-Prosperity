@@ -200,8 +200,7 @@ def split_rooms_cap4(row: pd.Series) -> list[dict]:
 
 @st.cache_data(show_spinner=False)
 def build_room_level_dataset(df: pd.DataFrame, max_rows: int = 300) -> pd.DataFrame:
-    work = df.copy().reset_index(drop=False)
-    work = work.rename(columns={"index": "source_row_id"})
+    work = df.head(int(max_rows)).copy().reset_index(drop=False)
 
     records: list[dict] = []
     for _, row in work.iterrows():
@@ -521,7 +520,7 @@ with tab1:
     with c1:
         st.write("**Shape & Preview**")
         st.write(df_raw.shape)
-        st.dataframe(df_raw.head(int(preview_rows)).head(20), use_container_width=True)
+        st.dataframe(df_raw.head(int(preview_rows)), use_container_width=True)
 
     with c2:
         st.write("**Dtypes**")
