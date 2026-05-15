@@ -725,36 +725,36 @@ Aturan split yang dipakai:
         elif "was_split" not in df_room.columns:
             st.warning("Kolom was_split belum tersedia di hasil split.")
         else:
-            split_only = df_room[df_room["was_split"] == True].copy()
-            if split_only.empty:
-                st.info("Pada data yang diproses, tidak ada row yang benar-benar perlu di-split.")
+            source_df_used = st.session_state.get("split_preview_before")
+            if not isinstance(source_df_used, pd.DataFrame):
+                st.warning("Data mentah sebelum split belum tersedia.")
+            elif "source_row_id" not in source_df_used.columns:
+                st.warning("Kolom source_row_id tidak ditemukan pada data sebelum split.")
             else:
-                source_df_used = st.session_state.get("split_preview_before")
-                if not isinstance(source_df_used, pd.DataFrame):
-                    st.warning("Data before split belum tersedia.")
-                elif "source_row_id" not in source_df_used.columns:
-                    st.warning("Kolom source_row_id tidak ditemukan pada before split.")
+                before_raw = source_df_used.copy()
+        
+                before_raw["total_guests"] = (
+                    pd.to_numeric(before_raw["adults"], errors="coerce").fillna(0)
+                    + pd.to_numeric(before_raw["children"], errors="coerce").fillna(0)
+                    + pd.to_numeric(before_raw["babies"], errors="coerce").fillna(0)
+                )
+        
+                before_raw["estimated_rooms_before"] = np.ceil(
+                    before_raw["total_guests"] / 4
+                ).astype(int)
+        
+                before_raw.loc[
+                    before_raw["estimated_rooms_before"] < 1,
+                    "estimated_rooms_before"
+                ] = 1
+        
+                before_proof = before_raw[before_raw["estimated_rooms_before"] > 1].copy()
+                split_only = df_room[df_room["was_split"] == True].copy()
+                if before_proof.empty:
+                    st.info("Pada data mentah sebelum split, tidak ada row yang membutuhkan lebih dari 1 room.")
+        
                 else:
-                    source_ids = split_only["source_row_id"].drop_duplicates().tolist()
-                    before_proof = source_df_used[
-                        source_df_used["source_row_id"].isin(source_ids)
-                    ].copy()
-        
-                    st.markdown("#### Before (row asli yang ter-split)")
-                    before_proof["total_guests"] = (
-                        pd.to_numeric(before_proof["adults"], errors="coerce").fillna(0)
-                        + pd.to_numeric(before_proof["children"], errors="coerce").fillna(0)
-                        + pd.to_numeric(before_proof["babies"], errors="coerce").fillna(0)
-                    )
-        
-                    before_proof["estimated_rooms_before"] = np.ceil(
-                        before_proof["total_guests"] / 4
-                    ).astype(int)
-        
-                    before_proof.loc[
-                        before_proof["estimated_rooms_before"] < 1,
-                        "estimated_rooms_before"
-                    ] = 1
+                    st.markdown("#### Before Split - Row asli dari data mentah")
         
                     cols_before = [
                         c for c in [
@@ -769,15 +769,13 @@ Aturan split yang dipakai:
                         if c in before_proof.columns
                     ]
         
-                    if cols_before:
-                        st.dataframe(
-                            before_proof[cols_before].head(50),
-                            use_container_width=True
-                        )
-                    else:
-                        st.info("Kolom before split yang ingin ditampilkan tidak tersedia.")
-        
+                    st.dataframe(
+                        before_proof[cols_before].head(50),
+                        use_container_width=True
+                    )
+
                     st.markdown("##### Chart Before Split")
+        
                     before_dist_df = (
                         before_proof
                         .groupby("estimated_rooms_before")
@@ -792,11 +790,11 @@ Aturan split yang dipakai:
                         .encode(
                             x=alt.X(
                                 "estimated_rooms_before:O",
-                                title="Jumlah room dari row asli sebelum split"
+                                title="Jumlah room sebelum split"
                             ),
                             y=alt.Y(
                                 "booking_count:Q",
-                                title="Jumlah booking"
+                                title="Jumlah booking dari data mentah"
                             ),
                             tooltip=[
                                 "estimated_rooms_before",
@@ -810,7 +808,11 @@ Aturan split yang dipakai:
                     st.altair_chart(before_chart, use_container_width=True)
                     st.dataframe(before_dist_df, use_container_width=True)
         
-                    st.markdown("#### After (hasil pecahan per room)")
+                if split_only.empty:
+                    st.info("Pada hasil after split, tidak ada row yang benar-benar ter-split.")
+        
+                else:
+                    st.markdown("#### After Split - Hasil pecahan per room")
                     cols_after = [
                         c for c in [
                             "source_row_id",
@@ -825,15 +827,13 @@ Aturan split yang dipakai:
                         if c in split_only.columns
                     ]
         
-                    if cols_after:
-                        st.dataframe(
-                            split_only[cols_after].head(100),
-                            use_container_width=True
-                        )
-                    else:
-                        st.info("Kolom after split yang ingin ditampilkan tidak tersedia.")
-        
+                    st.dataframe(
+                        split_only[cols_after].head(100),
+                        use_container_width=True
+                    )
+    
                     st.markdown("##### Chart After Split")
+        
                     after_dist_df = (
                         split_only[["source_row_id", "split_room_count"]]
                         .drop_duplicates()
@@ -853,7 +853,7 @@ Aturan split yang dipakai:
                             ),
                             y=alt.Y(
                                 "booking_count:Q",
-                                title="Jumlah booking"
+                                title="Jumlah booking dari data after split"
                             ),
                             tooltip=[
                                 "split_room_count",
