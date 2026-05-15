@@ -758,6 +758,29 @@ Aturan split yang dipakai:
                     else:
                         st.info("Kolom before split yang ingin ditampilkan tidak tersedia.")
 
+                    if "rooms_in_booking" in df_room.columns:
+                        st.markdown("### Distribusi Jumlah Room per Booking")
+                        dist_df = (
+                            df_room[["bookingID", "rooms_in_booking"]]
+                            .drop_duplicates()
+                            .groupby("rooms_in_booking")
+                            .size()
+                            .reset_index(name="booking_count")
+                            .sort_values("rooms_in_booking"))
+                        dist_chart = (
+                            alt.Chart(dist_df)
+                            .mark_bar()
+                            .encode(
+                                x=alt.X("rooms_in_booking:Q", title="Rooms in booking"),
+                                y=alt.Y("booking_count:Q", title="Number of bookings"),
+                                tooltip=["rooms_in_booking", "booking_count"],
+                            )
+                            .properties(height=300)
+                            .interactive()
+                        )
+                        st.altair_chart(dist_chart, use_container_width=True)
+                        st.dataframe(dist_df, use_container_width=True)
+                    
                     st.markdown("#### After (hasil pecahan per room)")
                     cols_after = [c for c in [
                         "source_row_id", "bookingID", "room_no", "split_room_count",
@@ -768,16 +791,31 @@ Aturan split yang dipakai:
                     else:
                         st.info("Kolom after split yang ingin ditampilkan tidak tersedia.")
 
-        if "rooms_in_booking" in df_room.columns:
-            st.markdown("### Distribusi Jumlah Room per Booking")
+        if {"source_row_id", "split_room_count"}.issubset(df_room.columns):
+            st.markdown("### Distribusi Jumlah Room per Booking Setelah Split")
+        
             dist_df = (
-                df_room[["bookingID", "rooms_in_booking"]]
+                df_room[["source_row_id", "split_room_count"]]
                 .drop_duplicates()
-                .groupby("rooms_in_booking")
+                .groupby("split_room_count")
                 .size()
                 .reset_index(name="booking_count")
-                .sort_values("rooms_in_booking")
+                .sort_values("split_room_count")
             )
+            st.dataframe(dist_df, use_container_width=True)
+        
+            dist_chart = (
+                alt.Chart(dist_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("split_room_count:O", title="Jumlah room hasil split"),
+                    y=alt.Y("booking_count:Q", title="Jumlah booking"),
+                    tooltip=["split_room_count", "booking_count"],
+                )
+                .properties(height=300)
+                .interactive()
+            )
+            st.altair_chart(dist_chart, use_container_width=True)
             dist_chart = (
                 alt.Chart(dist_df)
                 .mark_bar()
