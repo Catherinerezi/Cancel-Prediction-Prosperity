@@ -748,7 +748,7 @@ Aturan split yang dipakai:
                     "estimated_rooms_before"
                 ] = 1
         
-                before_proof = before_raw[before_raw["estimated_rooms_before"] > 1].copy()
+                before_proof = before_raw.copy()
                 split_only = df_room[df_room["was_split"] == True].copy()
                 if before_proof.empty:
                     st.info("Pada data mentah sebelum split, tidak ada row yang membutuhkan lebih dari 1 room.")
@@ -828,14 +828,14 @@ Aturan split yang dipakai:
                     ]
         
                     st.dataframe(
-                        split_only[cols_after].head(100),
+                        df_room[cols_after].head(100),
                         use_container_width=True
                     )
     
                     st.markdown("##### Chart After Split")
         
                     after_dist_df = (
-                        split_only[["source_row_id", "split_room_count"]]
+                        df_room[["source_row_id", "split_room_count"]]
                         .drop_duplicates()
                         .groupby("split_room_count")
                         .size()
