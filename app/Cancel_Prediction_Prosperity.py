@@ -200,18 +200,32 @@ def split_rooms_cap4(row: pd.Series) -> list[dict]:
 
 @st.cache_data(show_spinner=False)
 def build_room_level_dataset(df: pd.DataFrame, max_rows: int = 300) -> pd.DataFrame:
-    work = df.head(int(max_rows)).copy().reset_index(drop=False)
-
+    work = (
+        df.head(int(max_rows))
+        .copy()
+        .reset_index(drop=False)
+        .rename(columns={"index": "source_row_id"}))
+    
     records: list[dict] = []
+
     for _, row in work.iterrows():
         split_result = split_rooms_cap4(row)
         for i, rec in enumerate(split_result, start=1):
+            rec["source_row_id"] = row["source_row_id"]
             rec["room_no"] = i
             rec["split_room_count"] = len(split_result)
             rec["was_split"] = len(split_result) > 1
             records.append(rec)
 
     out = pd.DataFrame(records).reset_index(drop=True)
+
+    if "bookingID" in out.columns:
+        out["bookingID"] = out["bookingID"].astype(str)
+        out["Invoice_ID"] = np.arange(1, len(out) + 1, dtype=int)
+        out["rooms_in_booking"] = out.groupby("bookingID")["Invoice_ID"].transform("count")
+        out["bulk_3p_rooms"] = out["rooms_in_booking"] >= 3
+
+    return out
 
     if "bookingID" in out.columns:
         out["bookingID"] = out["bookingID"].astype(str)
@@ -415,9 +429,27 @@ with st.sidebar:
         load_btn = st.form_submit_button("Load data")
 
     st.header("Manual limits")
-    preview_rows = st.number_input("Preview rows", min_value=20, max_value=5000, value=300, step=20)
-    split_rows = st.number_input("Rows for split room", min_value=20, max_value=5000, value=300, step=20)
-    model_rows = st.number_input("Rows for modeling", min_value=100, max_value=5000, value=1000, step=50)
+    total_rows_loaded = len(st.session_state["df_raw"]) if "df_raw" in st.session_state else 5000
+    preview_rows = st.number_input(
+        "Preview rows",
+        min_value=20,
+        max_value=min(total_rows_loaded, 5000),
+        value=min(300, total_rows_loaded),
+        step=20)
+
+    split_rows = st.number_input(
+        "Rows for split room",
+        min_value=20,
+        max_value=total_rows_loaded,
+        value=total_rows_loaded,
+        step=1000)
+
+    model_rows = st.number_input(
+        "Rows for modeling",
+        min_value=100,
+        max_value=total_rows_loaded,
+        value=min(10000, total_rows_loaded),
+        step=1000)
 
     st.header("Global filters")
 
@@ -654,11 +686,17 @@ Aturan split yang dipakai:
 
     if st.button("Run split room", key="btn_split"):
         source_df = df_active.copy()
+        rows_to_process = min(int(split_rows), len(source_df))
         st.session_state["split_preview_before"] = (
-            source_df.head(int(split_rows)).copy().reset_index(drop=False).rename(columns={"index": "source_row_id"})
-        )
-        st.session_state["df_room"] = build_room_level_dataset(source_df, max_rows=int(split_rows))
-        st.success("Split room selesai.")
+            source_df
+            .head(rows_to_process)
+            .copy()
+            .reset_index(drop=False)
+            .rename(columns={"index": "source_row_id"}))
+        st.session_state["df_room"] = build_room_level_dataset(
+            source_df,
+            max_rows=rows_to_process)
+        st.success(f"Split room selesai. Rows diproses: {rows_to_process:,}")
 
     if "df_room" in st.session_state:
         df_room = st.session_state["df_room"]
@@ -668,7 +706,8 @@ Aturan split yang dipakai:
         s1, s2, s3 = st.columns(3)
         s1.metric("Rows before split (processed)", len(before_split) if before_split is not None else 0)
         s2.metric("Rows after split", len(df_room))
-        s3.metric("Rows not processed", max(len(df_raw) - int(split_rows), 0))
+        rows_processed = len(before_split) if before_split is not None else 0
+        s3.metric("Rows not processed", max(len(df_active) - rows_processed, 0))
 
         check_df = before_split.copy()
         check_df["total_guests"] = (
