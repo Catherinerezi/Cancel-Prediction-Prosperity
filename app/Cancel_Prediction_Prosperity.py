@@ -227,14 +227,6 @@ def build_room_level_dataset(df: pd.DataFrame, max_rows: int = 300) -> pd.DataFr
 
     return out
 
-    if "bookingID" in out.columns:
-        out["bookingID"] = out["bookingID"].astype(str)
-        out["Invoice_ID"] = np.arange(1, len(out) + 1, dtype=int)
-        out["rooms_in_booking"] = out.groupby("bookingID")["Invoice_ID"].transform("count")
-        out["bulk_3p_rooms"] = out["rooms_in_booking"] >= 3
-
-    return out
-
 @st.cache_data(show_spinner=False)
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
@@ -767,19 +759,6 @@ Aturan split yang dipakai:
                             .size()
                             .reset_index(name="booking_count")
                             .sort_values("rooms_in_booking"))
-                        dist_chart = (
-                            alt.Chart(dist_df)
-                            .mark_bar()
-                            .encode(
-                                x=alt.X("rooms_in_booking:Q", title="Rooms in booking"),
-                                y=alt.Y("booking_count:Q", title="Number of bookings"),
-                                tooltip=["rooms_in_booking", "booking_count"],
-                            )
-                            .properties(height=300)
-                            .interactive()
-                        )
-                        st.altair_chart(dist_chart, use_container_width=True)
-                        st.dataframe(dist_df, use_container_width=True)
                     
                     st.markdown("#### After (hasil pecahan per room)")
                     cols_after = [c for c in [
