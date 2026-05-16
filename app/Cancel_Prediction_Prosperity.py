@@ -822,16 +822,15 @@ Aturan split yang dipakai:
     
                     st.markdown("##### Chart After Split")
 
+                    after_room_count_per_booking = df_room.groupby("bookingID").size()
+
                     after_dist_df = (
-                        df_room["bookingID"]
+                        after_room_count_per_booking
                         .value_counts()
-                        .value_counts()
-                        .reset_index()
+                        .sort_index()
+                        .rename_axis("rooms_after_split")
+                        .reset_index(name="booking_count")
                     )
-                    
-                    after_dist_df.columns = ["rooms_after_split", "booking_count"]
-                    
-                    after_dist_df = after_dist_df.sort_values("rooms_after_split")
                     
                     after_chart = (
                         alt.Chart(after_dist_df)
