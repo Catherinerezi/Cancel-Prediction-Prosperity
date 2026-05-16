@@ -821,11 +821,11 @@ Aturan split yang dipakai:
                     )
     
                     st.markdown("##### Chart After Split")
-        
+
                     after_booking_df = (
                         df_room
-                        .groupby("bookingID")
-                        .size()
+                        .groupby("bookingID")["room_no"]
+                        .nunique()
                         .reset_index(name="rooms_after_split")
                     )
                     
@@ -836,7 +836,7 @@ Aturan split yang dipakai:
                         .reset_index(name="booking_count")
                         .sort_values("rooms_after_split")
                     )
-        
+                    
                     after_chart = (
                         alt.Chart(after_dist_df)
                         .mark_bar()
