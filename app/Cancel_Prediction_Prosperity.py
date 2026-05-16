@@ -292,6 +292,35 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     if "required_car_parking_spaces" in out.columns:
         out["car_flag"] = pd.to_numeric(out["required_car_parking_spaces"], errors="coerce").fillna(0) > 0
 
+    if {"adults", "minors"}.issubset(out.columns):
+        out["couple_flag"] = (out["adults"].fillna(0).eq(2)) & (out["minors"].fillna(0).eq(0))
+        out["solo_flag"] = (out["adults"].fillna(0).eq(1)) & (out["minors"].fillna(0).eq(0))
+    if "rooms_in_booking" in out.columns:
+        out["bulk_flag"] = out["rooms_in_booking"] >= 3
+    
+    if {"agent", "bookingID", "rooms_in_booking"}.issubset(out.columns):
+        booking_bulk = (
+            out.drop_duplicates("bookingID")
+            .assign(_bulk=lambda d: d["rooms_in_booking"] >= 3)
+            .groupby("agent")["_bulk"]
+            .sum()
+            .rename("bulk_bookings_by_agent")
+        )
+        out = out.merge(booking_bulk, on="agent", how="left")
+        out["bulk_booker_agent_flag"] = out["bulk_bookings_by_agent"].fillna(0).ge(3)
+    
+    if "days_in_waiting_list" in out.columns:
+        out["waiting_list_flag"] = pd.to_numeric(out["days_in_waiting_list"], errors="coerce").fillna(0) > 0
+    
+    if {"market_segment", "distribution_channel"}.issubset(out.columns):
+        out["seg_x_chan"] = out["market_segment"].astype(str) + " | " + out["distribution_channel"].astype(str)
+    
+    if {"reserved_room_type", "assigned_room_type"}.issubset(out.columns):
+        out["room_mismatch_flag"] = out["reserved_room_type"].astype(str) != out["assigned_room_type"].astype(str)
+    
+    if "booking_changes" in out.columns:
+        out["changes_flag"] = pd.to_numeric(out["booking_changes"], errors="coerce").fillna(0) > 0
+
     return out
 
 def make_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
@@ -687,8 +716,11 @@ Aturan split yang dipakai:
             .rename(columns={"index": "source_row_id"}))
         st.session_state["df_room"] = build_room_level_dataset(
             source_df,
-            max_rows=rows_to_process)
-        st.success(f"Split room selesai. Rows diproses: {rows_to_process:,}")
+            max_rows=rows_to_process
+        )
+        
+        st.session_state["df_model"] = add_features(st.session_state["df_room"]) 
+        st.success(f"Split room + feature engineering selesai. Rows diproses: {rows_to_process:,}")
 
     if "df_room" in st.session_state:
         df_room = st.session_state["df_room"]
@@ -874,7 +906,9 @@ with tab4:
     st.subheader("EDA")
     st.caption("EDA memakai data terakhir yang kamu proses manual.")
 
-    if "df_room" in st.session_state:
+    if "df_model" in st.session_state:
+        eda_source = st.session_state["df_model"]
+    elif "df_room" in st.session_state:
         eda_source = st.session_state["df_room"]
     else:
         eda_source = df_active.copy()
@@ -903,11 +937,21 @@ with tab4:
             "distribution_channel",
             "deposit_type",
             "customer_type",
-            "bulk_3p_rooms",
             "season",
             "lead_time_bin",
             "adr_bin",
             "family_flag",
+            "couple_flag",
+            "solo_flag",
+            "bulk_3p_rooms",
+            "bulk_flag",
+            "bulk_booker_agent_flag",
+            "waiting_list_flag",
+            "req_flag",
+            "car_flag",
+            "room_mismatch_flag",
+            "changes_flag",
+            "seg_x_chan",
         ] if c in eda_source.columns
     ]
     if cat_candidates and "is_canceled" in eda_source.columns:
