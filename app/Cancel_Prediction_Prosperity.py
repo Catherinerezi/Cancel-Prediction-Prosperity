@@ -231,32 +231,69 @@ def build_room_level_dataset(df: pd.DataFrame, max_rows: int = 300) -> pd.DataFr
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
-    for c in [
+    # BASIC TYPE SAFETY
+    num_safe_cols = [
         "children", "babies", "adults",
         "stays_in_week_nights", "stays_in_weekend_nights",
-        "adr", "lead_time"
-    ]:
+        "adr", "lead_time", "total_of_special_requests",
+        "required_car_parking_spaces", "days_in_waiting_list",
+        "booking_changes", "agent"
+    ]
+
+    for c in num_safe_cols:
         if c in out.columns:
             out[c] = pd.to_numeric(out[c], errors="coerce")
 
+    if "bookingID" in out.columns:
+        out["bookingID"] = out["bookingID"].astype(str)
+
+    # FINAL LOCK ROOM FEATURES
+    if "Invoice_ID" not in out.columns or not out["Invoice_ID"].is_unique:
+        out = out.reset_index(drop=True)
+        out["Invoice_ID"] = np.arange(1, len(out) + 1, dtype=int)
+
+    if "bookingID" in out.columns:
+        out["rooms_in_booking"] = out.groupby("bookingID")["Invoice_ID"].transform("count")
+        out["bulk_3p_rooms"] = out["rooms_in_booking"] >= 3
+        out["bulk_flag"] = out["rooms_in_booking"] >= 3
+
+    # OCCUPANCY & DURATION
     if {"children", "babies"}.issubset(out.columns):
         out["minors"] = out["children"].fillna(0) + out["babies"].fillna(0)
+
     if {"adults", "minors"}.issubset(out.columns):
         out["party_size"] = out["adults"].fillna(0) + out["minors"].fillna(0)
+        out["family_flag"] = out["minors"].fillna(0) > 0
+        out["couple_flag"] = (out["adults"].fillna(0).eq(2)) & (out["minors"].fillna(0).eq(0))
+        out["solo_flag"] = (out["adults"].fillna(0).eq(1)) & (out["minors"].fillna(0).eq(0))
+
     if {"stays_in_week_nights", "stays_in_weekend_nights"}.issubset(out.columns):
-        out["stay_nights"] = out["stays_in_week_nights"].fillna(0) + out["stays_in_weekend_nights"].fillna(0)
+        out["stay_nights"] = (
+            out["stays_in_week_nights"].fillna(0)
+            + out["stays_in_weekend_nights"].fillna(0)
+        )
+
     if {"stays_in_weekend_nights", "stay_nights"}.issubset(out.columns):
         out["weekend_ratio"] = np.where(
             out["stay_nights"] > 0,
-            out["stays_in_weekend_nights"] / out["stay_nights"],
+            out["stays_in_weekend_nights"].fillna(0) / out["stay_nights"],
             0.0
         )
+
+    # REVENUE FEATURES
     if {"adr", "stay_nights"}.issubset(out.columns):
         out["room_revenue"] = out["adr"].fillna(0) * out["stay_nights"].fillna(0)
+
     if {"bookingID", "room_revenue"}.issubset(out.columns):
-        booking_rev = out.groupby("bookingID")["room_revenue"].sum().rename("booking_revenue")
+        booking_rev = (
+            out.groupby("bookingID")["room_revenue"]
+            .sum()
+            .rename("booking_revenue")
+        )
+        out = out.drop(columns=["booking_revenue"], errors="ignore")
         out = out.merge(booking_rev, on="bookingID", how="left")
 
+    # TIME / SEASON / BINNING
     if "arrival_date_month" in out.columns:
         season_map = {
             "December": "High",
@@ -272,7 +309,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         out["lead_time_bin"] = pd.cut(
             out["lead_time"],
             bins=[-1, 7, 30, 90, 180, 9999],
-            labels=["<=7d", "8-30d", "31-90d", "91-180d", ">180d"],
+            labels=["≤7d", "8–30d", "31–90d", "91–180d", ">180d"],
         )
 
     if "adr" in out.columns:
@@ -285,41 +322,87 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         except Exception:
             out["adr_bin"] = "Q3"
 
-    if {"children", "babies"}.issubset(out.columns):
-        out["family_flag"] = (out["children"].fillna(0) + out["babies"].fillna(0)) > 0
-    if "total_of_special_requests" in out.columns:
-        out["req_flag"] = pd.to_numeric(out["total_of_special_requests"], errors="coerce").fillna(0) > 0
-    if "required_car_parking_spaces" in out.columns:
-        out["car_flag"] = pd.to_numeric(out["required_car_parking_spaces"], errors="coerce").fillna(0) > 0
-
-    if {"adults", "minors"}.issubset(out.columns):
-        out["couple_flag"] = (out["adults"].fillna(0).eq(2)) & (out["minors"].fillna(0).eq(0))
-        out["solo_flag"] = (out["adults"].fillna(0).eq(1)) & (out["minors"].fillna(0).eq(0))
-    if "rooms_in_booking" in out.columns:
-        out["bulk_flag"] = out["rooms_in_booking"] >= 3
-    
-    if {"agent", "bookingID", "rooms_in_booking"}.issubset(out.columns):
-        booking_bulk = (
+    # BULK BOOKER FEATURES
+    if {"bookingID", "agent", "bulk_flag"}.issubset(out.columns):
+        bookings_bulk = (
             out.drop_duplicates("bookingID")
-            .assign(_bulk=lambda d: d["rooms_in_booking"] >= 3)
-            .groupby("agent")["_bulk"]
+            .groupby("agent")["bulk_flag"]
             .sum()
             .rename("bulk_bookings_by_agent")
         )
-        out = out.merge(booking_bulk, on="agent", how="left")
+
+        out = out.drop(columns=["bulk_bookings_by_agent"], errors="ignore")
+        out = out.merge(bookings_bulk, on="agent", how="left")
         out["bulk_booker_agent_flag"] = out["bulk_bookings_by_agent"].fillna(0).ge(3)
-    
+
+    # OPERATIONAL FLAGS
     if "days_in_waiting_list" in out.columns:
-        out["waiting_list_flag"] = pd.to_numeric(out["days_in_waiting_list"], errors="coerce").fillna(0) > 0
-    
-    if {"market_segment", "distribution_channel"}.issubset(out.columns):
-        out["seg_x_chan"] = out["market_segment"].astype(str) + " | " + out["distribution_channel"].astype(str)
-    
-    if {"reserved_room_type", "assigned_room_type"}.issubset(out.columns):
-        out["room_mismatch_flag"] = out["reserved_room_type"].astype(str) != out["assigned_room_type"].astype(str)
-    
+        out["waiting_list_flag"] = out["days_in_waiting_list"].fillna(0) > 0
+
+    if "total_of_special_requests" in out.columns:
+        out["req_flag"] = out["total_of_special_requests"].fillna(0) > 0
+
+    if "required_car_parking_spaces" in out.columns:
+        out["car_flag"] = out["required_car_parking_spaces"].fillna(0) > 0
+
     if "booking_changes" in out.columns:
-        out["changes_flag"] = pd.to_numeric(out["booking_changes"], errors="coerce").fillna(0) > 0
+        out["changes_flag"] = out["booking_changes"].fillna(0) > 0
+
+    # CHANNEL / ROOM MISMATCH
+    if {"market_segment", "distribution_channel"}.issubset(out.columns):
+        out["seg_x_chan"] = (
+            out["market_segment"].astype(str)
+            + " | "
+            + out["distribution_channel"].astype(str)
+        )
+
+    if {"reserved_room_type", "assigned_room_type"}.issubset(out.columns):
+        out["room_mismatch_flag"] = (
+            out["reserved_room_type"].astype(str)
+            != out["assigned_room_type"].astype(str)
+        )
+
+    # BOOKING-LEVEL AGGREGATES
+    if "bookingID" in out.columns:
+        agg_dict = {}
+
+        if "is_canceled" in out.columns:
+            agg_dict["is_canceled_booking"] = ("is_canceled", "max")
+        if "adr" in out.columns:
+            agg_dict["adr_median"] = ("adr", "median")
+        if "booking_revenue" in out.columns:
+            agg_dict["booking_revenue_booking"] = ("booking_revenue", "first")
+        if "rooms_in_booking" in out.columns:
+            agg_dict["rooms_in_booking_booking"] = ("rooms_in_booking", "first")
+        if "bulk_flag" in out.columns:
+            agg_dict["bulk_flag_booking"] = ("bulk_flag", "first")
+        if "family_flag" in out.columns:
+            agg_dict["family_any"] = ("family_flag", "max")
+        if "weekend_ratio" in out.columns:
+            agg_dict["weekend_ratio_mean"] = ("weekend_ratio", "mean")
+        if "room_mismatch_flag" in out.columns:
+            agg_dict["room_mismatch_any"] = ("room_mismatch_flag", "max")
+        if "req_flag" in out.columns:
+            agg_dict["req_any"] = ("req_flag", "max")
+        if "waiting_list_flag" in out.columns:
+            agg_dict["waiting_list_any"] = ("waiting_list_flag", "max")
+        if "changes_flag" in out.columns:
+            agg_dict["changes_any"] = ("changes_flag", "max")
+
+        if agg_dict:
+            booking_agg = out.groupby("bookingID").agg(**agg_dict)
+
+            add_cols = [
+                c for c in booking_agg.columns
+                if c not in out.columns
+            ]
+
+            out = out.merge(
+                booking_agg[add_cols],
+                left_on="bookingID",
+                right_index=True,
+                how="left"
+            )
 
     return out
 
@@ -559,8 +642,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
         "Overview",
         "Cleaning",
         "Split Room",
-        "EDA",
         "Feature Engineering",
+        "EDA",
         "Modeling",
         "Importance + PDP + Simulator",
     ]
@@ -719,8 +802,11 @@ Aturan split yang dipakai:
             max_rows=rows_to_process
         )
         
-        st.session_state["df_model"] = add_features(st.session_state["df_room"]) 
-        st.success(f"Split room + feature engineering selesai. Rows diproses: {rows_to_process:,}")
+        st.session_state["df_model"] = add_features(st.session_state["df_room"])
+        
+        st.success(
+            f"Split room + feature engineering selesai. Rows diproses: {rows_to_process:,}"
+        )
 
     if "df_room" in st.session_state:
         df_room = st.session_state["df_room"]
@@ -901,7 +987,32 @@ Aturan split yang dipakai:
                         st.altair_chart(after_split_only_chart, use_container_width=True)
                         st.dataframe(after_dist_split_only, use_container_width=True)
 
-# TAB 4 - EDA
+# TAB 4 - FEATURE ENGINEERING
+with tab5:
+    st.subheader("Feature Engineering")
+    st.caption("Feature engineering hanya jalan setelah klik tombol.")
+
+    if st.button("Run feature engineering", key="btn_fe"):
+        source_df = st.session_state.get("df_room")
+        if source_df is None:
+            st.warning("Run split room dulu.")
+        else:
+            st.session_state["df_model"] = add_features(source_df)
+            st.success("Feature engineering selesai.")
+
+    if "df_model" in st.session_state:
+        df_model = st.session_state["df_model"]
+        st.dataframe(df_model.head(20), use_container_width=True)
+        feature_examples = [
+            c for c in [
+                "minors", "party_size", "stay_nights", "weekend_ratio", "room_revenue",
+                "booking_revenue", "season", "lead_time_bin", "adr_bin", "family_flag",
+                "req_flag", "car_flag",
+            ] if c in df_model.columns
+        ]
+        st.write("Contoh fitur baru:", feature_examples)
+
+# TAB 5 - EDA
 with tab4:
     st.subheader("EDA")
     st.caption("EDA memakai data terakhir yang kamu proses manual.")
@@ -976,31 +1087,6 @@ with tab4:
             .interactive()
         )
         st.altair_chart(rate_chart, use_container_width=True)
-
-# TAB 5 - FEATURE ENGINEERING
-with tab5:
-    st.subheader("Feature Engineering")
-    st.caption("Feature engineering hanya jalan setelah klik tombol.")
-
-    if st.button("Run feature engineering", key="btn_fe"):
-        source_df = st.session_state.get("df_room")
-        if source_df is None:
-            st.warning("Run split room dulu.")
-        else:
-            st.session_state["df_model"] = add_features(source_df)
-            st.success("Feature engineering selesai.")
-
-    if "df_model" in st.session_state:
-        df_model = st.session_state["df_model"]
-        st.dataframe(df_model.head(20), use_container_width=True)
-        feature_examples = [
-            c for c in [
-                "minors", "party_size", "stay_nights", "weekend_ratio", "room_revenue",
-                "booking_revenue", "season", "lead_time_bin", "adr_bin", "family_flag",
-                "req_flag", "car_flag",
-            ] if c in df_model.columns
-        ]
-        st.write("Contoh fitur baru:", feature_examples)
 
 # TAB 6 - MODELING
 with tab6:
