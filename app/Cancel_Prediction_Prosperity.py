@@ -776,35 +776,23 @@ Aturan split yang dipakai:
 
                     st.markdown("##### Chart Before Split")
         
-                    before_dist_df = (
-                        before_proof
-                        .groupby("estimated_rooms_before")
-                        .size()
-                        .reset_index(name="booking_count")
-                        .sort_values("estimated_rooms_before")
-                    )
+                    before_dist_df = pd.DataFrame({
+                        "room_before_split": [1],
+                        "booking_count": [before_raw["bookingID"].nunique()]
+                    })
         
                     before_chart = (
                         alt.Chart(before_dist_df)
                         .mark_bar()
                         .encode(
-                            x=alt.X(
-                                "estimated_rooms_before:O",
-                                title="Jumlah room sebelum split"
-                            ),
-                            y=alt.Y(
-                                "booking_count:Q",
-                                title="Jumlah booking dari data mentah"
-                            ),
-                            tooltip=[
-                                "estimated_rooms_before",
-                                "booking_count"
-                            ],
+                            x=alt.X("room_before_split:O", title="Jumlah room sebelum split"),
+                            y=alt.Y("booking_count:Q", title="Jumlah booking"),
+                            tooltip=["room_before_split", "booking_count"],
                         )
                         .properties(height=300)
                         .interactive()
                     )
-        
+                    
                     st.altair_chart(before_chart, use_container_width=True)
                     st.dataframe(before_dist_df, use_container_width=True)
         
@@ -834,36 +822,33 @@ Aturan split yang dipakai:
     
                     st.markdown("##### Chart After Split")
         
+                    after_booking_df = (
+                        df_room
+                        .groupby("bookingID")
+                        .size()
+                        .reset_index(name="rooms_after_split")
+                    )
+                    
                     after_dist_df = (
-                        df_room[["source_row_id", "split_room_count"]]
-                        .drop_duplicates()
-                        .groupby("split_room_count")
+                        after_booking_df
+                        .groupby("rooms_after_split")
                         .size()
                         .reset_index(name="booking_count")
-                        .sort_values("split_room_count")
+                        .sort_values("rooms_after_split")
                     )
         
                     after_chart = (
                         alt.Chart(after_dist_df)
                         .mark_bar()
                         .encode(
-                            x=alt.X(
-                                "split_room_count:O",
-                                title="Jumlah room setelah split"
-                            ),
-                            y=alt.Y(
-                                "booking_count:Q",
-                                title="Jumlah booking dari data after split"
-                            ),
-                            tooltip=[
-                                "split_room_count",
-                                "booking_count"
-                            ],
+                            x=alt.X("rooms_after_split:O", title="Jumlah room setelah split"),
+                            y=alt.Y("booking_count:Q", title="Jumlah booking"),
+                            tooltip=["rooms_after_split", "booking_count"],
                         )
                         .properties(height=300)
                         .interactive()
                     )
-        
+                    
                     st.altair_chart(after_chart, use_container_width=True)
                     st.dataframe(after_dist_df, use_container_width=True)
 
