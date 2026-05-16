@@ -821,14 +821,16 @@ Aturan split yang dipakai:
                     )
     
                     st.markdown("##### Chart After Split")
-
+                    # Hitung dari data AFTER SPLIT:
+                    # 1 bookingID muncul berapa baris = berapa kamar setelah split
                     after_booking_df = (
                         df_room
-                        .groupby("bookingID")["room_no"]
-                        .nunique()
+                        .groupby("bookingID")
+                        .size()
                         .reset_index(name="rooms_after_split")
                     )
                     
+                    # Distribusi: berapa booking yang jadi 1 kamar, 2 kamar, 3 kamar, dst.
                     after_dist_df = (
                         after_booking_df
                         .groupby("rooms_after_split")
@@ -841,8 +843,8 @@ Aturan split yang dipakai:
                         alt.Chart(after_dist_df)
                         .mark_bar()
                         .encode(
-                            x=alt.X("rooms_after_split:O", title="Jumlah room setelah split"),
-                            y=alt.Y("booking_count:Q", title="Jumlah booking"),
+                            x=alt.X("rooms_after_split:O", title="Jumlah kamar setelah split"),
+                            y=alt.Y("booking_count:Q", title="Jumlah booking ID"),
                             tooltip=["rooms_after_split", "booking_count"],
                         )
                         .properties(height=300)
