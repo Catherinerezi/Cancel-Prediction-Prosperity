@@ -848,6 +848,28 @@ Aturan split yang dipakai:
                     st.altair_chart(after_chart, use_container_width=True)
                     st.dataframe(after_dist_df, use_container_width=True)
 
+                    st.markdown("##### Chart After Split - Hanya Booking yang Jadi Lebih dari 1 Kamar")
+                    
+                    after_dist_split_only = after_dist_df[after_dist_df["rooms_after_split"] > 1].copy()
+                    
+                    if after_dist_split_only.empty:
+                        st.info("Tidak ada booking yang menjadi lebih dari 1 kamar.")
+                    else:
+                        after_split_only_chart = (
+                            alt.Chart(after_dist_split_only)
+                            .mark_bar()
+                            .encode(
+                                x=alt.X("rooms_after_split:O", title="Jumlah kamar setelah split"),
+                                y=alt.Y("booking_count:Q", title="Jumlah bookingID"),
+                                tooltip=["rooms_after_split", "booking_count"],
+                            )
+                            .properties(height=300)
+                            .interactive()
+                        )
+                    
+                        st.altair_chart(after_split_only_chart, use_container_width=True)
+                        st.dataframe(after_dist_split_only, use_container_width=True)
+
 # TAB 4 - EDA
 with tab4:
     st.subheader("EDA")
