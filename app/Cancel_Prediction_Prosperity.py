@@ -204,14 +204,14 @@ def build_room_level_dataset(df: pd.DataFrame, max_rows: int = 300) -> pd.DataFr
         df.head(int(max_rows))
         .copy()
         .reset_index(drop=False)
-        .rename(columns={"index": "source_row_id"}))
+        .rename(columns={"index": "raw_row_number"}))
     
     records: list[dict] = []
 
     for _, row in work.iterrows():
         split_result = split_rooms_cap4(row)
         for i, rec in enumerate(split_result, start=1):
-            rec["source_row_id"] = row["source_row_id"]
+            rec["raw_row_number"] = row["raw_row_number"]
             rec["room_no"] = i
             rec["split_room_count"] = len(split_result)
             rec["was_split"] = len(split_result) > 1
@@ -796,7 +796,7 @@ Aturan split yang dipakai:
             .head(rows_to_process)
             .copy()
             .reset_index(drop=False)
-            .rename(columns={"index": "source_row_id"}))
+            .rename(columns={"index": "raw_row_number"}))
         st.session_state["df_room"] = build_room_level_dataset(
             source_df,
             max_rows=rows_to_process
@@ -831,7 +831,7 @@ Aturan split yang dipakai:
         st.markdown("### Kandidat Row yang Berpotensi Ter-Split")
         if not candidate_split.empty:
             cols_show = [c for c in [
-                "source_row_id", "bookingID", "adults", "children", "babies", "total_guests"
+                "raw_row_number", "bookingID", "adults", "children", "babies", "total_guests"
             ] if c in candidate_split.columns]
             st.dataframe(candidate_split[cols_show].head(20), use_container_width=True)
         else:
@@ -846,8 +846,8 @@ Aturan split yang dipakai:
             source_df_used = st.session_state.get("split_preview_before")
             if not isinstance(source_df_used, pd.DataFrame):
                 st.warning("Data mentah sebelum split belum tersedia.")
-            elif "source_row_id" not in source_df_used.columns:
-                st.warning("Kolom source_row_id tidak ditemukan pada data sebelum split.")
+            elif "raw_row_number" not in source_df_used.columns:
+                st.warning("Kolom raw_row_number tidak ditemukan pada data sebelum split.")
             else:
                 before_raw = source_df_used.copy()
         
@@ -876,7 +876,7 @@ Aturan split yang dipakai:
         
                     cols_before = [
                         c for c in [
-                            "source_row_id",
+                            "raw_row_number",
                             "bookingID",
                             "adults",
                             "children",
@@ -921,7 +921,7 @@ Aturan split yang dipakai:
                     st.markdown("#### After Split - Hasil pecahan per room")
                     cols_after = [
                         c for c in [
-                            "source_row_id",
+                            "raw_row_number",
                             "bookingID",
                             "room_no",
                             "split_room_count",
