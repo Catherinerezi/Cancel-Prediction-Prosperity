@@ -972,8 +972,14 @@ Aturan split yang dipakai:
                     "estimated_rooms_before"
                 ] = 1
         
-                before_proof = before_raw.copy()
                 split_only = df_room[df_room["was_split"] == True].copy()
+                split_raw_ids = split_only["raw_row_number"].drop_duplicates().tolist()
+                before_proof = before_raw[
+                    before_raw["raw_row_number"].isin(split_raw_ids)
+                ].copy()
+                
+                before_proof = before_proof.sort_values("raw_row_number").reset_index(drop=True)
+                before_proof.insert(0, "before_row", np.arange(1, len(before_proof) + 1))
                 if before_proof.empty:
                     st.info("Pada data mentah sebelum split, tidak ada row yang membutuhkan lebih dari 1 room.")
         
@@ -982,8 +988,9 @@ Aturan split yang dipakai:
         
                     cols_before = [
                         c for c in [
-                            "raw_row_number",
+                            "before_row",
                             "bookingID",
+                            "raw_row_number",
                             "adults",
                             "children",
                             "babies",
