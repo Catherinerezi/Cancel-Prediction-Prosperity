@@ -988,7 +988,7 @@ Aturan split yang dipakai:
                         st.dataframe(after_dist_split_only, use_container_width=True)
 
 # TAB 4 - FEATURE ENGINEERING
-with tab5:
+with tab4:
     st.subheader("Feature Engineering")
     st.caption("Feature engineering hanya jalan setelah klik tombol.")
 
@@ -1013,7 +1013,7 @@ with tab5:
         st.write("Contoh fitur baru:", feature_examples)
 
 # TAB 5 - EDA
-with tab4:
+with tab5:
     st.subheader("EDA")
     st.caption("EDA memakai data terakhir yang kamu proses manual.")
 
