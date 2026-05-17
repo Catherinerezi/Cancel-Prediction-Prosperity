@@ -16,6 +16,12 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
+from lightgbm import LGBMClassifier
+from sklearn.metrics import (
+    roc_auc_score, average_precision_score, brier_score_loss,
+    log_loss, precision_score, recall_score, f1_score,
+    roc_curve, precision_recall_curve
+)
 from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
@@ -556,7 +562,7 @@ def evaluate_model(pipe: Pipeline, X_test: pd.DataFrame, y_test: pd.Series, thre
         "f1": f1_score(y_test, pred, zero_division=0),
     }
 
-def train_and_compare_models(X_train, y_train, X_test, y_test) -> pd.DataFrame:
+def train_and_compare_models(X_train, y_train, X_test, y_test):
     models = {
         "Logistic Regression": Pipeline([
             ("preprocess", make_preprocessor(X_train)),
@@ -578,21 +584,61 @@ def train_and_compare_models(X_train, y_train, X_test, y_test) -> pd.DataFrame:
                 n_jobs=-1
             )),
         ]),
+        "LightGBM": Pipeline([
+            ("preprocess", make_preprocessor(X_train)),
+            ("model", LGBMClassifier(
+                n_estimators=200,
+                learning_rate=0.05,
+                num_leaves=31,
+                random_state=42
+            )),
+        ]),
     }
 
-    rows = []
+    metric_rows = []
+    roc_rows = []
+    pr_rows = []
+    trained_pipes = {}
 
     for name, pipe in models.items():
         pipe.fit(X_train, y_train)
-        metrics = evaluate_model(pipe, X_test, y_test)
+        y_prob = pipe.predict_proba(X_test)[:, 1]
+        y_pred = (y_prob >= 0.5).astype(int)
 
-        rows.append({
+        metric_rows.append({
             "model": name,
-            **metrics,
-            "pipe": pipe,
+            "roc_auc": roc_auc_score(y_test, y_prob),
+            "pr_auc": average_precision_score(y_test, y_prob),
+            "brier": brier_score_loss(y_test, y_prob),
+            "logloss": log_loss(y_test, y_prob),
+            "precision": precision_score(y_test, y_pred, zero_division=0),
+            "recall": recall_score(y_test, y_pred, zero_division=0),
+            "f1": f1_score(y_test, y_pred, zero_division=0),
         })
 
-    return pd.DataFrame(rows)
+        fpr, tpr, _ = roc_curve(y_test, y_prob)
+        for a, b in zip(fpr, tpr):
+            roc_rows.append({
+                "model": name,
+                "fpr": a,
+                "tpr": b
+            })
+
+        precision_arr, recall_arr, _ = precision_recall_curve(y_test, y_prob)
+        for a, b in zip(recall_arr, precision_arr):
+            pr_rows.append({
+                "model": name,
+                "recall": a,
+                "precision": b
+            })
+
+        trained_pipes[name] = pipe
+
+    metric_df = pd.DataFrame(metric_rows)
+    roc_df = pd.DataFrame(roc_rows)
+    pr_df = pd.DataFrame(pr_rows)
+
+    return metric_df, roc_df, pr_df, trained_pipes
 
 def get_feature_names(pipe: Pipeline) -> list[str]:
     ct = pipe.named_steps["preprocess"]
@@ -1221,12 +1267,21 @@ with tab6:
         if source_df is None:
             st.warning("Run feature engineering dulu.")
         else:
-            X_train, X_test, y_train, y_test = prepare_model_data(source_df, max_rows=int(model_rows))
-            cmp_full = train_and_compare_models(X_train, y_train, X_test, y_test)
+            X_train, X_test, y_train, y_test = prepare_model_data(
+                source_df,
+                max_rows=int(model_rows)
+            )
+            
+            metric_df, roc_df, pr_df, trained_pipes = train_and_compare_models(
+                X_train,
+                y_train,
+                X_test,
+                y_test
+            )
             
             # pilih Logistic Regression sebagai model utama karena lebih interpretatif
-            logreg_row = cmp_full[cmp_full["model"] == "Logistic Regression"].iloc[0]
-            pipe = logreg_row["pipe"]
+            logreg_row = metric_df[metric_df["model"] == "Logistic Regression"].iloc[0]
+            pipe = trained_pipes["Logistic Regression"]
             
             metrics = {
                 "roc_auc": logreg_row["roc_auc"],
@@ -1244,7 +1299,11 @@ with tab6:
             st.session_state["y_test"] = y_test
             st.session_state["model_pipe"] = pipe
             st.session_state["model_metrics"] = metrics
-            st.session_state["model_compare"] = cmp_full.drop(columns=["pipe"])
+            
+            st.session_state["model_compare"] = metric_df
+            st.session_state["roc_curve_df"] = roc_df
+            st.session_state["pr_curve_df"] = pr_df
+            
             st.success("Model selesai dijalankan.")
 
     if "model_metrics" in st.session_state:
@@ -1264,32 +1323,63 @@ with tab6:
         model_compare = st.session_state["model_compare"].copy()
         st.dataframe(model_compare, use_container_width=True)
     
-        metric_long = model_compare.melt(
-            id_vars="model",
-            value_vars=["roc_auc", "pr_auc", "precision", "recall", "f1"],
-            var_name="metric",
-            value_name="score"
-        )
-    
-        model_chart = (
-            alt.Chart(metric_long)
-            .mark_bar()
-            .encode(
-                x=alt.X("metric:N", title="Metric"),
-                y=alt.Y("score:Q", title="Score", scale=alt.Scale(domain=[0, 1])),
-                color=alt.Color("model:N", title="Model"),
-                xOffset="model:N",
-                tooltip=[
-                    "model",
-                    "metric",
-                    alt.Tooltip("score:Q", format=".4f")
-                ],
-            )
-            .properties(height=330)
-            .interactive()
-        )
-    
-        st.altair_chart(model_chart, use_container_width=True)
+        if "model_compare" in st.session_state:
+            st.markdown("### Perbandingan Model")
+        
+            model_compare = st.session_state["model_compare"].copy()
+            st.dataframe(model_compare, use_container_width=True)
+        
+            if "roc_curve_df" in st.session_state and "pr_curve_df" in st.session_state:
+                st.markdown("### ROC Curve")
+        
+                roc_chart = (
+                    alt.Chart(st.session_state["roc_curve_df"])
+                    .mark_line()
+                    .encode(
+                        x=alt.X("fpr:Q", title="False Positive Rate"),
+                        y=alt.Y("tpr:Q", title="True Positive Rate"),
+                        color=alt.Color("model:N", title="Model"),
+                        tooltip=[
+                            "model",
+                            alt.Tooltip("fpr:Q", format=".4f"),
+                            alt.Tooltip("tpr:Q", format=".4f"),
+                        ],
+                    )
+                    .properties(height=400)
+                    .interactive()
+                )
+        
+                baseline_roc = (
+                    alt.Chart(pd.DataFrame({"fpr": [0, 1], "tpr": [0, 1]}))
+                    .mark_line(strokeDash=[6, 6])
+                    .encode(
+                        x=alt.X("fpr:Q"),
+                        y=alt.Y("tpr:Q"),
+                    )
+                )
+        
+                st.altair_chart(roc_chart + baseline_roc, use_container_width=True)
+        
+                st.markdown("### Precision-Recall Curve")
+        
+                pr_chart = (
+                    alt.Chart(st.session_state["pr_curve_df"])
+                    .mark_line()
+                    .encode(
+                        x=alt.X("recall:Q", title="Recall"),
+                        y=alt.Y("precision:Q", title="Precision"),
+                        color=alt.Color("model:N", title="Model"),
+                        tooltip=[
+                            "model",
+                            alt.Tooltip("recall:Q", format=".4f"),
+                            alt.Tooltip("precision:Q", format=".4f"),
+                        ],
+                    )
+                    .properties(height=400)
+                    .interactive()
+                )
+        
+                st.altair_chart(pr_chart, use_container_width=True)
     
         calibration_df = model_compare.melt(
             id_vars="model",
