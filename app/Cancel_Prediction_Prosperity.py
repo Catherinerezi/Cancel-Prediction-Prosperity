@@ -655,7 +655,7 @@ def train_and_compare_models(X_train, y_train, X_test, y_test):
     pr_df = pd.DataFrame(pr_rows)
     cal_df = pd.DataFrame(cal_rows)
 
-    return metric_df, roc_df, pr_df, trained_pipes
+    return metric_df, roc_df, pr_df, cal_df, trained_pipes
 
 def get_feature_names(pipe: Pipeline) -> list[str]:
     ct = pipe.named_steps["preprocess"]
