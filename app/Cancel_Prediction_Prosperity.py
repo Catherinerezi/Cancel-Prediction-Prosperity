@@ -439,16 +439,19 @@ def make_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
 
 def prepare_model_data(df: pd.DataFrame, max_rows: int = 1000):
     target = "is_canceled"
+
     if target not in df.columns:
         raise ValueError("Kolom is_canceled tidak ditemukan.")
 
     work = df.copy()
+
     if len(work) > max_rows:
         work = work.sample(max_rows, random_state=42).copy()
 
     if "reservation_status_date" in work.columns:
         train_df = work[work["reservation_status_date"] < "2019-01-01"].copy()
         test_df = work[work["reservation_status_date"] >= "2019-01-01"].copy()
+
         if len(train_df) < 50 or len(test_df) < 20:
             split_ix = int(len(work) * 0.8)
             train_df = work.iloc[:split_ix].copy()
@@ -458,11 +461,75 @@ def prepare_model_data(df: pd.DataFrame, max_rows: int = 1000):
         train_df = work.iloc[:split_ix].copy()
         test_df = work.iloc[split_ix:].copy()
 
-    drop_cols = [target, "Invoice_ID", "bookingID", "reservation_status_date", "reservation_status"]
-    X_train = train_df.drop(columns=[c for c in drop_cols if c in train_df.columns], errors="ignore")
+    # Kolom yang wajib dibuang supaya tidak leakage
+    drop_cols = [
+        target,
+
+        # ID / timestamp
+        "Invoice_ID",
+        "bookingID",
+        "source_row_id",
+        "reservation_status_date",
+
+        # Outcome / after-the-fact leakage
+        "reservation_status",
+        "is_canceled_booking",
+
+        # Room assignment after-the-fact
+        "assigned_room_type",
+        "room_mismatch_flag",
+        "room_mismatch_any",
+
+        # Aggregates yang terlalu dekat dengan hasil akhir / after split
+        "booking_revenue_booking",
+        "rooms_in_booking_booking",
+        "bulk_flag_booking",
+
+        # Booking-level post-event aggregate
+        "family_any",
+        "req_any",
+        "waiting_list_any",
+        "changes_any",
+
+        # Bisa bikin leakage/terlalu post-process untuk model cancellation
+        "seg_x_chan",
+        "bulk_bookings_by_agent",
+        "bulk_booker_agent_flag",
+    ]
+
+    X_train = train_df.drop(
+        columns=[c for c in drop_cols if c in train_df.columns],
+        errors="ignore"
+    )
+
     y_train = train_df[target].astype(int)
-    X_test = test_df.drop(columns=[c for c in drop_cols if c in test_df.columns], errors="ignore")
+
+    X_test = test_df.drop(
+        columns=[c for c in drop_cols if c in test_df.columns],
+        errors="ignore"
+    )
+
     y_test = test_df[target].astype(int)
+
+    # Safety check: kalau masih ada kolom yang jelas bocor, buang otomatis
+    leak_keywords = [
+        "is_canceled",
+        "reservation_status",
+        "mismatch_any",
+        "changes_any",
+        "waiting_list_any",
+        "req_any",
+    ]
+
+    auto_drop = [
+        c for c in X_train.columns
+        if any(k in c.lower() for k in leak_keywords)
+    ]
+
+    if auto_drop:
+        X_train = X_train.drop(columns=auto_drop, errors="ignore")
+        X_test = X_test.drop(columns=auto_drop, errors="ignore")
+
     return X_train, X_test, y_train, y_test
 
 @st.cache_resource(show_spinner=False)
