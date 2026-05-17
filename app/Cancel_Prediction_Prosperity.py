@@ -15,6 +15,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
@@ -554,6 +555,44 @@ def evaluate_model(pipe: Pipeline, X_test: pd.DataFrame, y_test: pd.Series, thre
         "recall": recall_score(y_test, pred, zero_division=0),
         "f1": f1_score(y_test, pred, zero_division=0),
     }
+
+def train_and_compare_models(X_train, y_train, X_test, y_test) -> pd.DataFrame:
+    models = {
+        "Logistic Regression": Pipeline([
+            ("preprocess", make_preprocessor(X_train)),
+            ("model", LogisticRegression(
+                max_iter=1200,
+                solver="liblinear",
+                class_weight="balanced",
+                random_state=42
+            )),
+        ]),
+        "Random Forest": Pipeline([
+            ("preprocess", make_preprocessor(X_train)),
+            ("model", RandomForestClassifier(
+                n_estimators=150,
+                max_depth=12,
+                min_samples_leaf=3,
+                class_weight="balanced_subsample",
+                random_state=42,
+                n_jobs=-1
+            )),
+        ]),
+    }
+
+    rows = []
+
+    for name, pipe in models.items():
+        pipe.fit(X_train, y_train)
+        metrics = evaluate_model(pipe, X_test, y_test)
+
+        rows.append({
+            "model": name,
+            **metrics,
+            "pipe": pipe,
+        })
+
+    return pd.DataFrame(rows)
 
 def get_feature_names(pipe: Pipeline) -> list[str]:
     ct = pipe.named_steps["preprocess"]
@@ -1166,14 +1205,29 @@ with tab6:
             st.warning("Run feature engineering dulu.")
         else:
             X_train, X_test, y_train, y_test = prepare_model_data(source_df, max_rows=int(model_rows))
-            pipe = train_fast_model(X_train, y_train)
-            metrics = evaluate_model(pipe, X_test, y_test)
+            cmp_full = train_and_compare_models(X_train, y_train, X_test, y_test)
+            
+            # pilih Logistic Regression sebagai model utama karena lebih interpretatif
+            logreg_row = cmp_full[cmp_full["model"] == "Logistic Regression"].iloc[0]
+            pipe = logreg_row["pipe"]
+            
+            metrics = {
+                "roc_auc": logreg_row["roc_auc"],
+                "pr_auc": logreg_row["pr_auc"],
+                "brier": logreg_row["brier"],
+                "logloss": logreg_row["logloss"],
+                "precision": logreg_row["precision"],
+                "recall": logreg_row["recall"],
+                "f1": logreg_row["f1"],
+            }
+            
             st.session_state["X_train"] = X_train
             st.session_state["X_test"] = X_test
             st.session_state["y_train"] = y_train
             st.session_state["y_test"] = y_test
             st.session_state["model_pipe"] = pipe
             st.session_state["model_metrics"] = metrics
+            st.session_state["model_compare"] = cmp_full.drop(columns=["pipe"])
             st.success("Model selesai dijalankan.")
 
     if "model_metrics" in st.session_state:
@@ -1186,6 +1240,71 @@ with tab6:
 
         cmp = pd.DataFrame([{"model": "Logistic Regression", **m}])
         st.dataframe(cmp, use_container_width=True)
+
+    if "model_compare" in st.session_state:
+        st.markdown("### Perbandingan Model")
+    
+        model_compare = st.session_state["model_compare"].copy()
+        st.dataframe(model_compare, use_container_width=True)
+    
+        metric_long = model_compare.melt(
+            id_vars="model",
+            value_vars=["roc_auc", "pr_auc", "precision", "recall", "f1"],
+            var_name="metric",
+            value_name="score"
+        )
+    
+        model_chart = (
+            alt.Chart(metric_long)
+            .mark_bar()
+            .encode(
+                x=alt.X("metric:N", title="Metric"),
+                y=alt.Y("score:Q", title="Score", scale=alt.Scale(domain=[0, 1])),
+                color=alt.Color("model:N", title="Model"),
+                xOffset="model:N",
+                tooltip=[
+                    "model",
+                    "metric",
+                    alt.Tooltip("score:Q", format=".4f")
+                ],
+            )
+            .properties(height=330)
+            .interactive()
+        )
+    
+        st.altair_chart(model_chart, use_container_width=True)
+    
+        calibration_df = model_compare.melt(
+            id_vars="model",
+            value_vars=["brier", "logloss"],
+            var_name="metric",
+            value_name="score"
+        )
+    
+        calibration_chart = (
+            alt.Chart(calibration_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("metric:N", title="Calibration / Probability Error Metric"),
+                y=alt.Y("score:Q", title="Score, lower is better"),
+                color=alt.Color("model:N", title="Model"),
+                xOffset="model:N",
+                tooltip=[
+                    "model",
+                    "metric",
+                    alt.Tooltip("score:Q", format=".4f")
+                ],
+            )
+            .properties(height=300)
+            .interactive()
+        )
+    
+        st.altair_chart(calibration_chart, use_container_width=True)
+    
+        st.info(
+            "Logistic Regression dipakai sebagai model utama karena lebih interpretatif, cepat, "
+            "dan probabilitasnya biasanya lebih mudah dijelaskan. Random Forest ditampilkan sebagai pembanding."
+        )
 
 # TAB 7 - IMPORTANCE + PDP + SIMULATOR
 with tab7:
