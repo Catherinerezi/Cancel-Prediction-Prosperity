@@ -16,6 +16,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.calibration import calibration_curve
 from lightgbm import LGBMClassifier
 from sklearn.metrics import (
     roc_auc_score, average_precision_score, brier_score_loss,
@@ -598,6 +599,7 @@ def train_and_compare_models(X_train, y_train, X_test, y_test):
     metric_rows = []
     roc_rows = []
     pr_rows = []
+    cal_rows = []
     trained_pipes = {}
 
     for name, pipe in models.items():
@@ -632,11 +634,26 @@ def train_and_compare_models(X_train, y_train, X_test, y_test):
                 "precision": b
             })
 
+        frac_pos, mean_pred = calibration_curve(
+            y_test,
+            y_prob,
+            n_bins=10,
+            strategy="uniform"
+        )
+        
+        for mp, fp in zip(mean_pred, frac_pos):
+            cal_rows.append({
+                "model": name,
+                "mean_predicted_probability": mp,
+                "fraction_of_positives": fp
+            })
+    
         trained_pipes[name] = pipe
 
     metric_df = pd.DataFrame(metric_rows)
     roc_df = pd.DataFrame(roc_rows)
     pr_df = pd.DataFrame(pr_rows)
+    cal_df = pd.DataFrame(cal_rows)
 
     return metric_df, roc_df, pr_df, trained_pipes
 
@@ -1272,7 +1289,7 @@ with tab6:
                 max_rows=int(model_rows)
             )
             
-            metric_df, roc_df, pr_df, trained_pipes = train_and_compare_models(
+            metric_df, roc_df, pr_df, cal_df, trained_pipes = train_and_compare_models(
                 X_train,
                 y_train,
                 X_test,
@@ -1303,6 +1320,7 @@ with tab6:
             st.session_state["model_compare"] = metric_df
             st.session_state["roc_curve_df"] = roc_df
             st.session_state["pr_curve_df"] = pr_df
+            st.session_state["calibration_curve_df"] = cal_df
             
             st.success("Model selesai dijalankan.")
 
@@ -1380,6 +1398,48 @@ with tab6:
                 )
         
                 st.altair_chart(pr_chart, use_container_width=True)
+
+            if "calibration_curve_df" in st.session_state:
+                st.markdown("### Calibration Curve")
+            
+                cal_chart = (
+                    alt.Chart(st.session_state["calibration_curve_df"])
+                    .mark_line(point=True)
+                    .encode(
+                        x=alt.X(
+                            "mean_predicted_probability:Q",
+                            title="Mean Predicted Probability",
+                            scale=alt.Scale(domain=[0, 1])
+                        ),
+                        y=alt.Y(
+                            "fraction_of_positives:Q",
+                            title="Fraction of Positives",
+                            scale=alt.Scale(domain=[0, 1])
+                        ),
+                        color=alt.Color("model:N", title="Model"),
+                        tooltip=[
+                            "model",
+                            alt.Tooltip("mean_predicted_probability:Q", format=".4f"),
+                            alt.Tooltip("fraction_of_positives:Q", format=".4f"),
+                        ],
+                    )
+                    .properties(height=400)
+                    .interactive()
+                )
+            
+                perfect_calibration = (
+                    alt.Chart(pd.DataFrame({
+                        "mean_predicted_probability": [0, 1],
+                        "fraction_of_positives": [0, 1],
+                    }))
+                    .mark_line(strokeDash=[6, 6], color="gray")
+                    .encode(
+                        x="mean_predicted_probability:Q",
+                        y="fraction_of_positives:Q",
+                    )
+                )
+            
+                st.altair_chart(cal_chart + perfect_calibration, use_container_width=True)
     
         calibration_df = model_compare.melt(
             id_vars="model",
