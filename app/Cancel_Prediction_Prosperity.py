@@ -1025,27 +1025,16 @@ Aturan split yang dipakai:
         
                 else:
                     st.markdown("#### After Split - Hasil pecahan per room")
-                    cols_after = [
-                        c for c in [
-                            "raw_row_number",
-                            "bookingID",
-                            "room_no",
-                            "split_room_count",
-                            "adults",
-                            "children",
-                            "babies",
-                            "viol_minors_without_adult",
-                        ]
-                        if c in split_only.columns
-                    ]
-        
+                
+                    split_raw_ids = split_only["raw_row_number"].drop_duplicates().tolist()
+                
                     after_proof = df_room[
                         df_room["raw_row_number"].isin(split_raw_ids)
                     ].copy()
-                    
+                
                     after_proof = after_proof.sort_values(["bookingID", "room_no"]).reset_index(drop=True)
                     after_proof.insert(0, "after_row", np.arange(1, len(after_proof) + 1))
-                    
+                
                     cols_after = [
                         c for c in [
                             "after_row",
@@ -1060,12 +1049,11 @@ Aturan split yang dipakai:
                         ]
                         if c in after_proof.columns
                     ]
-                    
+                
                     st.dataframe(
                         after_proof[cols_after].head(100),
                         use_container_width=True
                     )
-    
                     st.markdown("##### Chart After Split")
 
                     after_room_count_per_booking = df_room.groupby("bookingID").size()
