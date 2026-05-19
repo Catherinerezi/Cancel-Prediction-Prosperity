@@ -1566,7 +1566,6 @@ with tab7:
             )
             st.success("Importance selesai.")
 
-    with right:
     if "fi_intrinsic" in st.session_state and st.session_state["fi_intrinsic"] is not None:
         fi = st.session_state["fi_intrinsic"].head(20)
         fi_chart = (
