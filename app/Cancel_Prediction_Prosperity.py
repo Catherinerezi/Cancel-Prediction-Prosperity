@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import altair as alt
 import streamlit as st
+import dalex as dx
 
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
@@ -83,6 +84,12 @@ def reset_pipeline_state(clear_data: bool = False) -> None:
         "fi_intrinsic",
         "pdp_candidates",
         "split_preview_before",
+        "dalex_baseline_row",
+        "dalex_actual_row",
+        "dalex_actual_meta",
+        "dalex_baseline_explainer",
+        "dalex_baseline_prob",
+        "dalex_actual_prob",
     ]
     if clear_data:
         keys += ["df_raw"]
@@ -563,6 +570,41 @@ def evaluate_model(pipe: Pipeline, X_test: pd.DataFrame, y_test: pd.Series, thre
         "f1": f1_score(y_test, pred, zero_division=0),
     }
 
+def make_representative_baseline(X: pd.DataFrame) -> pd.DataFrame:
+    baseline = {}
+
+    for col in X.columns:
+        s = X[col]
+
+        if pd.api.types.is_numeric_dtype(s):
+            baseline[col] = s.median()
+        else:
+            mode_val = s.mode(dropna=True)
+            if not mode_val.empty:
+                baseline[col] = mode_val.iloc[0]
+            else:
+                baseline[col] = s.dropna().iloc[0] if s.dropna().shape[0] else None
+
+    return pd.DataFrame([baseline], columns=X.columns)
+
+
+def make_dalex_baseline_explainer(pipe, baseline_row: pd.DataFrame):
+    def predict_proba_positive(model, data):
+        return model.predict_proba(data)[:, 1]
+
+    baseline_prob = float(pipe.predict_proba(baseline_row)[:, 1][0])
+
+    explainer = dx.Explainer(
+        model=pipe,
+        data=baseline_row,
+        y=pd.Series([baseline_prob]),
+        predict_function=predict_proba_positive,
+        label="Logistic Regression - baseline vs actual",
+        verbose=False,
+    )
+
+    return explainer
+
 def train_and_compare_models(X_train, y_train, X_test, y_test):
     models = {
         "Logistic Regression": Pipeline([
@@ -814,7 +856,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
         "Feature Engineering",
         "EDA",
         "Modeling",
-        "Importance + PDP + Simulator",
+        "Importance + DALEX + Simulator",
     ]
 )
 
@@ -1321,6 +1363,50 @@ with tab6:
             st.session_state["roc_curve_df"] = roc_df
             st.session_state["pr_curve_df"] = pr_df
             st.session_state["calibration_curve_df"] = cal_df
+
+            baseline_row = make_representative_baseline(X_train)
+            baseline_prob = float(pipe.predict_proba(baseline_row)[:, 1][0])
+            
+            test_prob = pipe.predict_proba(X_test)[:, 1]
+            
+            meta_cols = [
+                c for c in [
+                    "bookingID",
+                    "is_canceled",
+                    "hotel",
+                    "market_segment",
+                    "distribution_channel",
+                    "deposit_type",
+                    "customer_type",
+                ]
+                if c in source_df.columns
+            ]
+            
+            actual_meta = source_df.loc[X_test.index, meta_cols].copy()
+            actual_meta["pred_cancel_probability"] = test_prob
+            actual_meta["baseline_cancel_probability"] = baseline_prob
+            actual_meta["delta_vs_baseline"] = (
+                actual_meta["pred_cancel_probability"]
+                - actual_meta["baseline_cancel_probability"]
+            )
+            actual_meta["abs_delta_vs_baseline"] = actual_meta["delta_vs_baseline"].abs()
+            
+            # Actual data dipilih otomatis:
+            # booking/row aktual yang prediksinya paling berbeda dari baseline.
+            actual_index = actual_meta["abs_delta_vs_baseline"].idxmax()
+            
+            actual_row = X_test.loc[[actual_index]]
+            actual_meta_one = actual_meta.loc[[actual_index]]
+            
+            baseline_explainer = make_dalex_baseline_explainer(pipe, baseline_row)
+            actual_prob = float(pipe.predict_proba(actual_row)[:, 1][0])
+            
+            st.session_state["dalex_baseline_row"] = baseline_row
+            st.session_state["dalex_actual_row"] = actual_row
+            st.session_state["dalex_actual_meta"] = actual_meta_one
+            st.session_state["dalex_baseline_explainer"] = baseline_explainer
+            st.session_state["dalex_baseline_prob"] = baseline_prob
+            st.session_state["dalex_actual_prob"] = actual_prob
             
             st.success("Model selesai dijalankan.")
 
@@ -1469,25 +1555,18 @@ with tab6:
 
 # TAB 7 - IMPORTANCE + PDP + SIMULATOR
 with tab7:
-    st.subheader("Importance + PDP + Simulator")
+    st.subheader("Importance + DALEX + Simulator")
 
-    left, right = st.columns(2)
-    with left:
-        if st.button("Generate importance", key="btn_imp"):
-            if "model_pipe" not in st.session_state:
-                st.warning("Run model dulu.")
-            else:
-                st.session_state["fi_intrinsic"] = get_intrinsic_importance(st.session_state["model_pipe"])
-                st.success("Importance selesai.")
+    if st.button("Generate importance", key="btn_imp"):
+        if "model_pipe" not in st.session_state:
+            st.warning("Run model dulu.")
+        else:
+            st.session_state["fi_intrinsic"] = get_intrinsic_importance(
+                st.session_state["model_pipe"]
+            )
+            st.success("Importance selesai.")
 
     with right:
-        if st.button("Prepare PDP", key="btn_pdp"):
-            if "model_pipe" not in st.session_state:
-                st.warning("Run model dulu.")
-            else:
-                st.session_state["pdp_candidates"] = st.session_state["X_test"].select_dtypes(include=[np.number]).columns.tolist()
-                st.success("PDP siap.")
-
     if "fi_intrinsic" in st.session_state and st.session_state["fi_intrinsic"] is not None:
         fi = st.session_state["fi_intrinsic"].head(20)
         fi_chart = (
@@ -1502,22 +1581,105 @@ with tab7:
             .interactive()
         )
         st.altair_chart(fi_chart, use_container_width=True)
+    st.markdown("### DALEX Baseline vs Actual Booking Explanation")
 
-    if "pdp_candidates" in st.session_state and st.session_state["pdp_candidates"]:
-        feat = st.selectbox("Pilih fitur numerik untuk PDP", options=st.session_state["pdp_candidates"], key="pdp_feat")
-        pdp_df = compute_pdp_1d(st.session_state["model_pipe"], st.session_state["X_test"].copy(), feat, grid_size=20)
-        pdp_chart = (
-            alt.Chart(pdp_df)
-            .mark_line(point=True)
-            .encode(
-                x=alt.X(f"{feat}:Q", title=feat),
-                y=alt.Y("pred_prob:Q", title="Predicted cancel probability"),
-                tooltip=[alt.Tooltip(feat, format=".3f"), alt.Tooltip("pred_prob:Q", format=".4f")],
+    if "model_pipe" not in st.session_state:
+        st.info("Run model dulu.")
+    else:
+        baseline_row = st.session_state.get("dalex_baseline_row")
+        actual_row = st.session_state.get("dalex_actual_row")
+        actual_meta = st.session_state.get("dalex_actual_meta")
+        explainer = st.session_state.get("dalex_baseline_explainer")
+        baseline_prob = st.session_state.get("dalex_baseline_prob")
+        actual_prob = st.session_state.get("dalex_actual_prob")
+    
+        if (
+            baseline_row is None
+            or actual_row is None
+            or actual_meta is None
+            or explainer is None
+        ):
+            st.warning("Run model ulang supaya DALEX baseline vs actual tersedia.")
+        else:
+            st.caption(
+                "Baseline dibuat dari median fitur numerik dan mode fitur kategorikal. "
+                "DALEX menjelaskan kenapa data aktual punya predicted cancel probability "
+                "lebih tinggi/rendah dibanding baseline tersebut."
             )
-            .properties(height=320)
-            .interactive()
-        )
-        st.altair_chart(pdp_chart, use_container_width=True)
+    
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Baseline cancel probability", f"{baseline_prob:.2%}")
+            c2.metric("Actual cancel probability", f"{actual_prob:.2%}")
+            c3.metric(
+                "Delta vs baseline",
+                f"{(actual_prob - baseline_prob):+.2%}"
+            )
+    
+            st.markdown("#### Actual booking/row yang dijelaskan")
+            st.dataframe(actual_meta, use_container_width=True)
+    
+            st.markdown("#### Baseline representative row")
+            st.dataframe(baseline_row, use_container_width=True)
+    
+            st.markdown("#### Actual model input row")
+            st.dataframe(actual_row, use_container_width=True)
+    
+            breakdown = explainer.predict_parts(
+                new_observation=actual_row.iloc[0],
+                type="break_down"
+            )
+    
+            bd = breakdown.result.copy()
+    
+            st.markdown("#### DALEX breakdown table")
+            st.dataframe(bd, use_container_width=True)
+    
+            plot_df = bd.copy()
+            plot_df["variable"] = plot_df["variable"].astype(str)
+    
+            plot_df = plot_df[
+                ~plot_df["variable"].str.lower().isin(
+                    ["intercept", "prediction", "baseline"]
+                )
+            ].copy()
+    
+            if "contribution" in plot_df.columns:
+                plot_df["abs_contribution"] = plot_df["contribution"].abs()
+                plot_df = (
+                    plot_df
+                    .sort_values("abs_contribution", ascending=False)
+                    .head(15)
+                )
+    
+                dalex_chart = (
+                    alt.Chart(plot_df)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X(
+                            "contribution:Q",
+                            title="Contribution terhadap cancel probability"
+                        ),
+                        y=alt.Y(
+                            "variable:N",
+                            sort="-x",
+                            title="Feature"
+                        ),
+                        tooltip=[
+                            "variable",
+                            alt.Tooltip("contribution:Q", format=".4f"),
+                        ],
+                    )
+                    .properties(height=420)
+                    .interactive()
+                )
+    
+                st.altair_chart(dalex_chart, use_container_width=True)
+    
+            st.info(
+                "Interpretasi: nilai kontribusi positif berarti fitur actual booking "
+                "menaikkan probability cancel dibanding baseline. Nilai negatif berarti "
+                "fitur tersebut menurunkan probability cancel dibanding baseline."
+            )
 
     st.markdown("### Simulator")
     if "model_pipe" not in st.session_state:
