@@ -1334,12 +1334,6 @@ with tab6:
 
         cmp = pd.DataFrame([{"model": "Logistic Regression", **m}])
         st.dataframe(cmp, use_container_width=True)
-
-    if "model_compare" in st.session_state:
-        st.markdown("### Perbandingan Model")
-    
-        model_compare = st.session_state["model_compare"].copy()
-        st.dataframe(model_compare, use_container_width=True)
     
         if "model_compare" in st.session_state:
             st.markdown("### Perbandingan Model")
