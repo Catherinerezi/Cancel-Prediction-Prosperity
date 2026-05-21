@@ -570,34 +570,31 @@ def evaluate_model(pipe: Pipeline, X_test: pd.DataFrame, y_test: pd.Series, thre
         "f1": f1_score(y_test, pred, zero_division=0),
     }
 
-def make_representative_baseline(X: pd.DataFrame) -> pd.DataFrame:
-    baseline = {}
+def make_representative_baseline_from_training(pipe, X_train: pd.DataFrame, max_background: int = 2000):
+    # Background DALEX pakai data training asli, bukan dummy median/mode sintetis
+    if len(X_train) > max_background:
+        background = X_train.sample(max_background, random_state=42).copy()
+    else:
+        background = X_train.copy()
 
-    for col in X.columns:
-        s = X[col]
+    train_prob = pipe.predict_proba(background)[:, 1]
+    baseline_prob = float(np.mean(train_prob))
 
-        if pd.api.types.is_numeric_dtype(s):
-            baseline[col] = s.median()
-        else:
-            mode_val = s.mode(dropna=True)
-            if not mode_val.empty:
-                baseline[col] = mode_val.iloc[0]
-            else:
-                baseline[col] = s.dropna().iloc[0] if s.dropna().shape[0] else None
+    # Representative row = actual row yang probability-nya paling dekat dengan baseline probability
+    closest_pos = int(np.argmin(np.abs(train_prob - baseline_prob)))
+    baseline_row = background.iloc[[closest_pos]].copy()
 
-    return pd.DataFrame([baseline], columns=X.columns)
+    return background, baseline_row, baseline_prob
 
 
-def make_dalex_baseline_explainer(pipe, baseline_row: pd.DataFrame):
+def make_dalex_background_explainer(pipe, background: pd.DataFrame):
     def predict_proba_positive(model, data):
         return model.predict_proba(data)[:, 1]
 
-    baseline_prob = float(pipe.predict_proba(baseline_row)[:, 1][0])
-
     explainer = dx.Explainer(
         model=pipe,
-        data=baseline_row,
-        y=pd.Series([baseline_prob]),
+        data=background,
+        y=None,
         predict_function=predict_proba_positive,
         label="Logistic Regression - baseline vs actual",
         verbose=False,
@@ -1364,50 +1361,21 @@ with tab6:
             st.session_state["pr_curve_df"] = pr_df
             st.session_state["calibration_curve_df"] = cal_df
 
-            baseline_row = make_representative_baseline(X_train)
-            baseline_prob = float(pipe.predict_proba(baseline_row)[:, 1][0])
-            
-            test_prob = pipe.predict_proba(X_test)[:, 1]
-            
-            meta_cols = [
-                c for c in [
-                    "bookingID",
-                    "is_canceled",
-                    "hotel",
-                    "market_segment",
-                    "distribution_channel",
-                    "deposit_type",
-                    "customer_type",
-                ]
-                if c in source_df.columns
-            ]
-            
-            actual_meta = source_df.loc[X_test.index, meta_cols].copy()
-            actual_meta["pred_cancel_probability"] = test_prob
-            actual_meta["baseline_cancel_probability"] = baseline_prob
-            actual_meta["delta_vs_baseline"] = (
-                actual_meta["pred_cancel_probability"]
-                - actual_meta["baseline_cancel_probability"]
+            baseline_background, baseline_row, baseline_prob = make_representative_baseline_from_training(
+                pipe,
+                X_train,
+                max_background=2000
             )
-            actual_meta["abs_delta_vs_baseline"] = actual_meta["delta_vs_baseline"].abs()
             
-            # Actual data dipilih otomatis:
-            # booking/row aktual yang prediksinya paling berbeda dari baseline.
-            actual_index = actual_meta["abs_delta_vs_baseline"].idxmax()
-            
-            actual_row = X_test.loc[[actual_index]]
-            actual_meta_one = actual_meta.loc[[actual_index]]
-            
-            baseline_explainer = make_dalex_baseline_explainer(pipe, baseline_row)
-            actual_prob = float(pipe.predict_proba(actual_row)[:, 1][0])
-            
+            baseline_explainer = make_dalex_background_explainer(
+                pipe,
+                baseline_background
+            )
+
             st.session_state["dalex_baseline_row"] = baseline_row
-            st.session_state["dalex_actual_row"] = actual_row
-            st.session_state["dalex_actual_meta"] = actual_meta_one
-            st.session_state["dalex_baseline_explainer"] = baseline_explainer
             st.session_state["dalex_baseline_prob"] = baseline_prob
-            st.session_state["dalex_actual_prob"] = actual_prob
-            
+            st.session_state["dalex_baseline_explainer"] = baseline_explainer
+            st.session_state["dalex_baseline_background"] = baseline_background
             st.success("Model selesai dijalankan.")
 
     if "model_metrics" in st.session_state:
@@ -1601,9 +1569,9 @@ with tab7:
             st.warning("Run model ulang supaya DALEX baseline vs actual tersedia.")
         else:
             st.caption(
-                "Baseline dibuat dari median fitur numerik dan mode fitur kategorikal. "
-                "DALEX menjelaskan kenapa data aktual punya predicted cancel probability "
-                "lebih tinggi/rendah dibanding baseline tersebut."
+                "Baseline DALEX dihitung dari rata-rata prediksi model pada data training/background. "
+                "Representative row yang ditampilkan adalah actual training row yang probability-nya paling dekat dengan baseline tersebut. "
+                "Jadi baseline bukan dummy ekstrem, tapi acuan dari distribusi data model."
             )
     
             c1, c2, c3 = st.columns(3)
