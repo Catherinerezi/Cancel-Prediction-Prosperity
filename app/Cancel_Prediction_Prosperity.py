@@ -1372,11 +1372,54 @@ with tab6:
                 baseline_background
             )
 
-            st.session_state["dalex_baseline_row"] = baseline_row
-            st.session_state["dalex_baseline_prob"] = baseline_prob
-            st.session_state["dalex_baseline_explainer"] = baseline_explainer
-            st.session_state["dalex_baseline_background"] = baseline_background
-            st.success("Model selesai dijalankan.")
+    test_prob = pipe.predict_proba(X_test)[:, 1]
+
+    meta_cols = [
+        c for c in [
+            "bookingID",
+            "raw_row_number",
+            "is_canceled",
+            "hotel",
+            "arrival_date_month",
+            "market_segment",
+            "distribution_channel",
+            "deposit_type",
+            "customer_type",
+        ]
+        if c in source_df.columns
+    ]
+    
+    prediction_table = source_df.loc[X_test.index, meta_cols].copy()
+    prediction_table["model_row_index"] = X_test.index
+    prediction_table["pred_cancel_probability"] = test_prob
+    prediction_table["baseline_cancel_probability"] = baseline_prob
+    prediction_table["delta_vs_baseline"] = (
+        prediction_table["pred_cancel_probability"]
+        - prediction_table["baseline_cancel_probability"]
+    )
+    prediction_table["abs_delta_vs_baseline"] = prediction_table["delta_vs_baseline"].abs()
+    
+    prediction_table = prediction_table.sort_values(
+        "abs_delta_vs_baseline",
+        ascending=False
+    ).reset_index(drop=True)
+    
+    active_model_index = prediction_table.iloc[0]["model_row_index"]
+    actual_row = X_test.loc[[active_model_index]]
+    actual_meta = prediction_table.iloc[[0]].copy()
+    actual_prob = float(pipe.predict_proba(actual_row)[:, 1][0])
+    
+    st.session_state["dalex_baseline_row"] = baseline_row
+    st.session_state["dalex_baseline_prob"] = baseline_prob
+    st.session_state["dalex_baseline_explainer"] = baseline_explainer
+    st.session_state["dalex_baseline_background"] = baseline_background
+    
+    st.session_state["dalex_prediction_table"] = prediction_table
+    st.session_state["dalex_actual_row"] = actual_row
+    st.session_state["dalex_actual_meta"] = actual_meta
+    st.session_state["dalex_actual_prob"] = actual_prob
+    
+    st.success("Model selesai dijalankan.")
 
     if "model_metrics" in st.session_state:
         m = st.session_state["model_metrics"]
@@ -1554,26 +1597,105 @@ with tab7:
         st.info("Run model dulu.")
     else:
         baseline_row = st.session_state.get("dalex_baseline_row")
-        actual_row = st.session_state.get("dalex_actual_row")
-        actual_meta = st.session_state.get("dalex_actual_meta")
         explainer = st.session_state.get("dalex_baseline_explainer")
         baseline_prob = st.session_state.get("dalex_baseline_prob")
-        actual_prob = st.session_state.get("dalex_actual_prob")
+        prediction_table = st.session_state.get("dalex_prediction_table")
     
         if (
             baseline_row is None
-            or actual_row is None
-            or actual_meta is None
+            or baseline_prob is None
             or explainer is None
+            or prediction_table is None
         ):
-            st.warning("Run model ulang supaya DALEX baseline vs actual tersedia.")
+            st.warning("DALEX belum tersedia. Masuk ke tab Modeling lalu klik Run model.")
         else:
             st.caption(
                 "Baseline DALEX dihitung dari rata-rata prediksi model pada data training/background. "
                 "Representative row yang ditampilkan adalah actual training row yang probability-nya paling dekat dengan baseline tersebut. "
                 "Jadi baseline bukan dummy ekstrem, tapi acuan dari distribusi data model."
             )
-    
+            
+            st.markdown("#### Filter actual booking untuk DALEX")
+            filtered_pred = prediction_table.copy()
+            filter_cols = [
+                c for c in [
+                    "hotel",
+                    "arrival_date_month",
+                    "market_segment",
+                    "distribution_channel",
+                    "deposit_type",
+                    "customer_type",
+                ]
+                if c in filtered_pred.columns
+            ]
+            
+            fcols = st.columns(3)
+            
+            for i, col in enumerate(filter_cols):
+                with fcols[i % 3]:
+                    options = (
+                        filtered_pred[col]
+                        .dropna()
+                        .astype(str)
+                        .sort_values()
+                        .unique()
+                        .tolist()
+                    )
+            
+                    selected_vals = st.multiselect(
+                        col,
+                        options=options,
+                        default=[],
+                        key=f"dalex_filter_{col}"
+                    )
+            
+                    if selected_vals:
+                        filtered_pred = filtered_pred[
+                            filtered_pred[col].astype(str).isin(selected_vals)
+                        ]
+            
+            if "bookingID" in filtered_pred.columns:
+                booking_options = (
+                    filtered_pred["bookingID"]
+                    .dropna()
+                    .astype(str)
+                    .sort_values()
+                    .unique()
+                    .tolist()
+                )
+            
+                selected_booking = st.selectbox(
+                    "bookingID aktif untuk DALEX breakdown",
+                    options=["Semua / otomatis ambil baris pertama"] + booking_options,
+                    index=0,
+                    key="dalex_booking_filter"
+                )
+            
+                if selected_booking != "Semua / otomatis ambil baris pertama":
+                    filtered_pred = filtered_pred[
+                        filtered_pred["bookingID"].astype(str) == str(selected_booking)
+                    ]
+            
+            st.markdown("#### Semua actual booking/row sesuai filter")
+            st.dataframe(
+                filtered_pred.reset_index(drop=True),
+                use_container_width=True
+            )
+            
+            if filtered_pred.empty:
+                st.info("Tidak ada data untuk kombinasi filter ini.")
+                st.stop()
+            
+            active_row_meta = filtered_pred.iloc[[0]].copy()
+            active_model_index = active_row_meta["model_row_index"].iloc[0]
+            
+            X_test = st.session_state["X_test"]
+            pipe = st.session_state["model_pipe"]
+            
+            actual_row = X_test.loc[[active_model_index]]
+            actual_prob = float(pipe.predict_proba(actual_row)[:, 1][0])
+            actual_meta = active_row_meta
+            
             c1, c2, c3 = st.columns(3)
             c1.metric("Baseline cancel probability", f"{baseline_prob:.2%}")
             c2.metric("Actual cancel probability", f"{actual_prob:.2%}")
