@@ -1372,6 +1372,9 @@ with tab6:
                 baseline_background
             )
 
+    pipe = st.session_state["model_pipe"]
+    X_train = st.session_state["X_train"]
+    X_test = st.session_state["X_test"]
     test_prob = pipe.predict_proba(X_test)[:, 1]
 
     meta_cols = [
