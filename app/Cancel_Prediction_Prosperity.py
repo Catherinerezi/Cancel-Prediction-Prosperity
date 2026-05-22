@@ -552,7 +552,7 @@ def train_fast_model(X_train: pd.DataFrame, y_train: pd.Series) -> Pipeline:
     preprocessor = make_preprocessor(X_train)
     pipe = Pipeline([
         ("preprocess", preprocessor),
-        ("model", LogisticRegression(max_iter=1200, solver="liblinear", class_weight="balanced", random_state=42)),
+        ("model", LogisticRegression(max_iter=1200, solver="liblinear", random_state=42)),
     ])
     pipe.fit(X_train, y_train)
     return pipe
@@ -609,7 +609,6 @@ def train_and_compare_models(X_train, y_train, X_test, y_test):
             ("model", LogisticRegression(
                 max_iter=1200,
                 solver="liblinear",
-                class_weight="balanced",
                 random_state=42
             )),
         ]),
