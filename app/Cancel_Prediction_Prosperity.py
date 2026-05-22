@@ -1594,11 +1594,14 @@ with tab7:
             .interactive()
         )
         st.altair_chart(fi_chart, use_container_width=True)
+    
     st.markdown("### DALEX Baseline vs Actual Booking Explanation")
-
     if "model_pipe" not in st.session_state:
-        st.info("Run model dulu.")
+        st.info("Masuk ke tab Modeling lalu klik **Run model** dulu.")
     else:
+        pipe = st.session_state["model_pipe"]
+        X_test = st.session_state["X_test"]
+    
         baseline_row = st.session_state.get("dalex_baseline_row")
         explainer = st.session_state.get("dalex_baseline_explainer")
         baseline_prob = st.session_state.get("dalex_baseline_prob")
@@ -1610,13 +1613,68 @@ with tab7:
             or explainer is None
             or prediction_table is None
         ):
-            st.warning("DALEX belum tersedia. Masuk ke tab Modeling lalu klik Run model.")
+            st.warning("DALEX belum tersedia. Klik **Generate DALEX data** di bawah ini.")
+    
+            if st.button("Generate DALEX data", key="btn_generate_dalex_data"):
+                X_train = st.session_state["X_train"]
+                source_df = st.session_state.get("df_model")
+    
+                baseline_background, baseline_row, baseline_prob = make_representative_baseline_from_training(
+                    pipe,
+                    X_train,
+                    max_background=2000
+                )
+    
+                explainer = make_dalex_background_explainer(
+                    pipe,
+                    baseline_background
+                )
+    
+                test_prob = pipe.predict_proba(X_test)[:, 1]
+    
+                meta_cols = [
+                    c for c in [
+                        "bookingID",
+                        "raw_row_number",
+                        "is_canceled",
+                        "hotel",
+                        "arrival_date_month",
+                        "market_segment",
+                        "distribution_channel",
+                        "deposit_type",
+                        "customer_type",
+                    ]
+                    if c in source_df.columns
+                ]
+    
+                prediction_table = source_df.loc[X_test.index, meta_cols].copy()
+                prediction_table["model_row_index"] = X_test.index
+                prediction_table["pred_cancel_probability"] = test_prob
+                prediction_table["baseline_cancel_probability"] = baseline_prob
+                prediction_table["delta_vs_baseline"] = (
+                    prediction_table["pred_cancel_probability"]
+                    - prediction_table["baseline_cancel_probability"]
+                )
+                prediction_table["abs_delta_vs_baseline"] = prediction_table["delta_vs_baseline"].abs()
+    
+                prediction_table = prediction_table.sort_values(
+                    "abs_delta_vs_baseline",
+                    ascending=False
+                ).reset_index(drop=True)
+    
+                st.session_state["dalex_baseline_row"] = baseline_row
+                st.session_state["dalex_baseline_prob"] = baseline_prob
+                st.session_state["dalex_baseline_explainer"] = explainer
+                st.session_state["dalex_baseline_background"] = baseline_background
+                st.session_state["dalex_prediction_table"] = prediction_table
+    
+                st.success("DALEX data berhasil dibuat.")
+                st.rerun()
+    
         else:
             st.caption(
                 "Baseline DALEX dihitung dari rata-rata prediksi model pada data training/background. "
-                "Representative row yang ditampilkan adalah actual training row yang probability-nya paling dekat dengan baseline tersebut. "
-                "Jadi baseline bukan dummy ekstrem, tapi acuan dari distribusi data model."
-            )
+                "Semua actual booking hasil prediksi tersedia di tabel filter.")
             
             st.markdown("#### Filter actual booking untuk DALEX")
             filtered_pred = prediction_table.copy()
