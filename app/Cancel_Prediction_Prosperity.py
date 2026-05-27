@@ -1548,7 +1548,7 @@ with tab7:
         )
         st.altair_chart(fi_chart, use_container_width=True)
     
-    st.markdown("### DALEX Baseline vs Actual Booking Explanation")
+    st.markdown("### DALEX: Filter Summary + Individual Booking Explanation")
 
     if "model_pipe" not in st.session_state:
         st.warning(
@@ -1577,7 +1577,7 @@ with tab7:
         if not dalex_ready:
             st.info(
                 "Model sudah tersedia, tapi data DALEX belum dibuat. "
-                "Klik tombol di bawah untuk membuat baseline, prediction table, dan data filter DALEX."
+                "Klik tombol di bawah untuk membuat prediction table yang dipakai untuk filter DALEX."
             )
     
             if st.button("Generate DALEX data", key="btn_generate_dalex_data"):
@@ -1622,10 +1622,8 @@ with tab7:
                     )
                     prediction_table["abs_delta_vs_baseline"] = prediction_table["delta_vs_baseline"].abs()
     
-                    prediction_table = prediction_table.sort_values(
-                        "abs_delta_vs_baseline",
-                        ascending=False
-                    ).reset_index(drop=True)
+                    # Jangan sort ekstrem sebagai default. Biarkan tabel netral.
+                    prediction_table = prediction_table.reset_index(drop=True)
     
                     st.session_state["dalex_baseline_row"] = baseline_row
                     st.session_state["dalex_baseline_prob"] = baseline_prob
@@ -1638,12 +1636,12 @@ with tab7:
     
         else:
             st.caption(
-                "Baseline DALEX dihitung dari rata-rata prediksi model pada data training/background. "
-                "Semua actual booking hasil prediksi tersedia di tabel filter. "
-                "DALEX menjelaskan actual row aktif dibanding baseline."
+                "Bagian ini punya dua level. Pertama, ringkasan semua booking yang masuk filter. "
+                "Kedua, DALEX breakdown hanya muncul jika satu bookingID spesifik dipilih. "
+                "Jadi angka prediksi tidak akan disalahpahami sebagai cancellation rate seluruh filter."
             )
     
-            st.markdown("#### Filter actual booking untuk DALEX")
+            st.markdown("#### 1. Filter data untuk DALEX")
     
             filtered_pred = prediction_table.copy()
     
@@ -1684,166 +1682,236 @@ with tab7:
                             filtered_pred[col].astype(str).isin(selected_vals)
                         ]
     
-            if "bookingID" in filtered_pred.columns:
-                booking_options = (
-                    filtered_pred["bookingID"]
-                    .dropna()
-                    .astype(str)
-                    .sort_values()
-                    .unique()
-                    .tolist()
-                )
-    
-                selected_booking = st.selectbox(
-                    "bookingID aktif untuk DALEX breakdown",
-                    options=["Semua / otomatis ambil baris pertama"] + booking_options,
-                    index=0,
-                    key="dalex_booking_filter"
-                )
-    
-                if selected_booking != "Semua / otomatis ambil baris pertama":
-                    filtered_pred = filtered_pred[
-                        filtered_pred["bookingID"].astype(str) == str(selected_booking)
-                    ]
-    
-            st.markdown("#### Semua actual booking/row sesuai filter")
-            st.dataframe(
-                filtered_pred.reset_index(drop=True),
-                use_container_width=True
-            )
-    
             if filtered_pred.empty:
                 st.info("Tidak ada data untuk kombinasi filter ini.")
             else:
-                active_row_meta = filtered_pred.iloc[[0]].copy()
-                active_model_index = active_row_meta["model_row_index"].iloc[0]
+                st.markdown("#### 2. Ringkasan semua booking dalam filter")
     
-                actual_row = X_test.loc[[active_model_index]]
-                actual_prob = float(pipe.predict_proba(actual_row)[:, 1][0])
+                n_rows = len(filtered_pred)
+                n_bookings = (
+                    filtered_pred["bookingID"].nunique()
+                    if "bookingID" in filtered_pred.columns
+                    else n_rows
+                )
     
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Baseline cancel probability", f"{baseline_prob:.2%}")
-                c2.metric("Actual cancel probability", f"{actual_prob:.2%}")
-                c3.metric("Delta vs baseline", f"{(actual_prob - baseline_prob):+.2%}")
+                avg_pred_prob = filtered_pred["pred_cancel_probability"].mean()
+                median_pred_prob = filtered_pred["pred_cancel_probability"].median()
     
-                st.markdown("#### Actual booking/row yang dijelaskan")
+                if "is_canceled" in filtered_pred.columns:
+                    actual_cancel_rate = filtered_pred["is_canceled"].mean()
+                else:
+                    actual_cancel_rate = np.nan
+    
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("Row dalam filter", f"{n_rows:,}")
+                s2.metric("BookingID dalam filter", f"{n_bookings:,}")
+                s3.metric("Rata-rata prediksi cancel", f"{avg_pred_prob:.2%}")
+                s4.metric(
+                    "Actual cancel rate",
+                    "N/A" if pd.isna(actual_cancel_rate) else f"{actual_cancel_rate:.2%}"
+                )
+    
+                st.caption(
+                    "Empat angka di atas adalah ringkasan untuk semua data yang masuk filter. "
+                    "Ini bukan DALEX individual dan bukan satu booking saja."
+                )
+    
                 st.dataframe(
-                    active_row_meta.reset_index(drop=True),
+                    filtered_pred.reset_index(drop=True),
                     use_container_width=True
                 )
     
-                st.markdown("#### Baseline representative row")
-                st.dataframe(
-                    baseline_row.reset_index(drop=True),
-                    use_container_width=True
-                )
+                st.markdown("#### 3. Pilih bookingID untuk DALEX individual")
     
-                st.markdown("#### Actual model input row")
-                st.dataframe(
-                    actual_row.reset_index(drop=True),
-                    use_container_width=True
-                )
-    
-                breakdown = explainer.predict_parts(
-                    new_observation=actual_row.iloc[0],
-                    type="break_down"
-                )
-    
-                bd = breakdown.result.copy()
-    
-                st.markdown("#### Ringkasan DALEX")
-    
-                explain_df = bd.copy()
-                explain_df["variable"] = explain_df["variable"].astype(str)
-    
-                explain_df = explain_df[
-                    ~explain_df["variable"].str.lower().isin(
-                        ["intercept", "prediction", "baseline"]
-                    )
-                ].copy()
-    
-                if "contribution" in explain_df.columns:
-                    explain_df = explain_df[
-                        explain_df["contribution"].abs() > 0.0001
-                    ].copy()
-    
-                    explain_df["impact_pct_point"] = explain_df["contribution"] * 100
-    
-                    increase_df = (
-                        explain_df[explain_df["contribution"] > 0]
-                        .sort_values("contribution", ascending=False)
-                        .head(10)
+                if "bookingID" in filtered_pred.columns:
+                    booking_options = (
+                        filtered_pred["bookingID"]
+                        .dropna()
+                        .astype(str)
+                        .sort_values()
+                        .unique()
+                        .tolist()
                     )
     
-                    decrease_df = (
-                        explain_df[explain_df["contribution"] < 0]
-                        .sort_values("contribution", ascending=True)
-                        .head(10)
+                    selected_booking = st.selectbox(
+                        "Pilih bookingID yang mau dijelaskan DALEX",
+                        options=["Belum pilih bookingID"] + booking_options,
+                        index=0,
+                        key="dalex_booking_filter"
                     )
     
-                    dc1, dc2 = st.columns(2)
+                    booking_is_selected = selected_booking != "Belum pilih bookingID"
     
-                    with dc1:
-                        st.markdown("##### Fitur yang menaikkan risiko cancel")
-                        if increase_df.empty:
-                            st.info("Tidak ada fitur yang menaikkan risiko secara signifikan.")
-                        else:
-                            st.dataframe(
-                                increase_df[["variable", "impact_pct_point", "cumulative"]],
-                                use_container_width=True
-                            )
-    
-                    with dc2:
-                        st.markdown("##### Fitur yang menurunkan risiko cancel")
-                        if decrease_df.empty:
-                            st.info("Tidak ada fitur yang menurunkan risiko secara signifikan.")
-                        else:
-                            st.dataframe(
-                                decrease_df[["variable", "impact_pct_point", "cumulative"]],
-                                use_container_width=True
-                            )
-    
-                    plot_df = explain_df.copy()
-                    plot_df["abs_contribution"] = plot_df["contribution"].abs()
-                    plot_df = (
-                        plot_df
-                        .sort_values("abs_contribution", ascending=False)
-                        .head(15)
-                    )
-    
-                    dalex_chart = (
-                        alt.Chart(plot_df)
-                        .mark_bar()
-                        .encode(
-                            x=alt.X(
-                                "impact_pct_point:Q",
-                                title="Dampak ke cancel probability (percentage point)"
-                            ),
-                            y=alt.Y(
-                                "variable:N",
-                                sort="-x",
-                                title="Feature"
-                            ),
-                            tooltip=[
-                                "variable",
-                                alt.Tooltip("impact_pct_point:Q", format=".2f"),
-                                alt.Tooltip("cumulative:Q", format=".4f"),
-                            ],
+                    if not booking_is_selected:
+                        st.info(
+                            "DALEX adalah breakdown untuk satu booking. "
+                            "Karena belum ada bookingID spesifik yang dipilih, app hanya menampilkan ringkasan filter di atas. "
+                            "Pilih satu bookingID untuk melihat fitur apa yang menaikkan atau menurunkan prediksi cancel."
                         )
-                        .properties(height=420)
-                        .interactive()
-                    )
     
-                    st.altair_chart(dalex_chart, use_container_width=True)
+                    else:
+                        selected_pred = filtered_pred[
+                            filtered_pred["bookingID"].astype(str) == str(selected_booking)
+                        ].copy()
     
-                with st.expander("Lihat raw DALEX table"):
-                    st.dataframe(bd, use_container_width=True)
+                        if selected_pred.empty:
+                            st.info("BookingID yang dipilih tidak ditemukan dalam hasil filter.")
+                        else:
+                            active_row_meta = selected_pred.iloc[[0]].copy()
+                            active_model_index = active_row_meta["model_row_index"].iloc[0]
     
-                st.info(
-                    "Interpretasi: kontribusi positif berarti fitur actual booking menaikkan "
-                    "predicted cancel probability dibanding baseline. Kontribusi negatif berarti "
-                    "fitur tersebut menurunkan predicted cancel probability dibanding baseline."
-                )
+                            actual_row = X_test.loc[[active_model_index]]
+                            selected_prob = float(pipe.predict_proba(actual_row)[:, 1][0])
+    
+                            if "is_canceled" in active_row_meta.columns:
+                                actual_label = (
+                                    "Canceled"
+                                    if int(active_row_meta["is_canceled"].iloc[0]) == 1
+                                    else "Not Canceled"
+                                )
+                            else:
+                                actual_label = "N/A"
+    
+                            st.markdown("#### Booking yang sedang dijelaskan")
+                            st.dataframe(
+                                active_row_meta.reset_index(drop=True),
+                                use_container_width=True
+                            )
+    
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric(
+                                "Prediksi cancel untuk booking ini",
+                                f"{selected_prob:.2%}"
+                            )
+                            c2.metric(
+                                "Status asli booking ini",
+                                actual_label
+                            )
+                            c3.metric(
+                                "Baseline model",
+                                f"{baseline_prob:.2%}"
+                            )
+    
+                            st.caption(
+                                "Catatan: prediksi cancel di atas hanya untuk bookingID yang dipilih, "
+                                "bukan untuk seluruh data hasil filter."
+                            )
+    
+                            with st.expander("Lihat input model untuk booking ini"):
+                                st.dataframe(
+                                    actual_row.reset_index(drop=True),
+                                    use_container_width=True
+                                )
+    
+                            breakdown = explainer.predict_parts(
+                                new_observation=actual_row.iloc[0],
+                                type="break_down"
+                            )
+    
+                            bd = breakdown.result.copy()
+    
+                            st.markdown("#### Ringkasan DALEX untuk booking ini")
+    
+                            explain_df = bd.copy()
+    
+                            # DALEX kadang punya variable_name, kadang hanya variable.
+                            if "variable_name" not in explain_df.columns:
+                                explain_df["variable_name"] = explain_df["variable"].astype(str)
+    
+                            if "variable_value" not in explain_df.columns:
+                                explain_df["variable_value"] = ""
+    
+                            explain_df["variable_name"] = explain_df["variable_name"].astype(str)
+    
+                            explain_df = explain_df[
+                                ~explain_df["variable_name"].str.lower().isin(
+                                    ["intercept", "prediction", "baseline"]
+                                )
+                            ].copy()
+    
+                            if "contribution" in explain_df.columns:
+                                explain_df = explain_df[
+                                    explain_df["contribution"].abs() > 0.0001
+                                ].copy()
+    
+                                explain_df["impact_pct_point"] = explain_df["contribution"] * 100
+    
+                                explain_df["arah_dampak"] = np.where(
+                                    explain_df["contribution"] > 0,
+                                    "Menaikkan prediksi cancel",
+                                    "Menurunkan prediksi cancel"
+                                )
+    
+                                explain_df["penjelasan"] = explain_df.apply(
+                                    lambda r: (
+                                        f"{r['variable_name']} bernilai {r['variable_value']} "
+                                        f"dan {str(r['arah_dampak']).lower()} sekitar "
+                                        f"{abs(r['impact_pct_point']):.2f} poin persentase."
+                                    ),
+                                    axis=1
+                                )
+    
+                                human_dalex = explain_df.copy()
+                                human_dalex["abs_impact"] = human_dalex["impact_pct_point"].abs()
+                                human_dalex = (
+                                    human_dalex
+                                    .sort_values("abs_impact", ascending=False)
+                                    .head(15)
+                                )
+    
+                                st.dataframe(
+                                    human_dalex[
+                                        [
+                                            "variable_name",
+                                            "variable_value",
+                                            "arah_dampak",
+                                            "impact_pct_point",
+                                            "penjelasan",
+                                        ]
+                                    ].rename(
+                                        columns={
+                                            "variable_name": "Faktor",
+                                            "variable_value": "Nilai booking ini",
+                                            "arah_dampak": "Arah dampak",
+                                            "impact_pct_point": "Dampak ke prediksi, poin persentase",
+                                            "penjelasan": "Penjelasan",
+                                        }
+                                    ),
+                                    use_container_width=True
+                                )
+    
+                                dalex_chart = (
+                                    alt.Chart(human_dalex)
+                                    .mark_bar()
+                                    .encode(
+                                        x=alt.X(
+                                            "impact_pct_point:Q",
+                                            title="Dampak ke prediksi cancel, poin persentase"
+                                        ),
+                                        y=alt.Y(
+                                            "variable:N",
+                                            sort="-x",
+                                            title="Fitur"
+                                        ),
+                                        tooltip=[
+                                            alt.Tooltip("variable:N", title="Fitur"),
+                                            alt.Tooltip("impact_pct_point:Q", format=".2f", title="Dampak"),
+                                        ],
+                                    )
+                                    .properties(height=420)
+                                    .interactive()
+                                )
+    
+                                st.altair_chart(dalex_chart, use_container_width=True)
+    
+                            with st.expander("Lihat raw DALEX table"):
+                                st.dataframe(bd, use_container_width=True)
+    
+                            st.info(
+                                "Interpretasi: DALEX menjelaskan booking yang dipilih saja. "
+                                "Kontribusi positif berarti fitur tersebut menaikkan prediksi cancel untuk booking ini. "
+                                "Kontribusi negatif berarti fitur tersebut menurunkan prediksi cancel untuk booking ini."
+                            )
 
     st.markdown("### Simulator")
     if "model_pipe" not in st.session_state:
