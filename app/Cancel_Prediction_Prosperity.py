@@ -1913,7 +1913,14 @@ with tab7:
                                 "Kontribusi negatif berarti fitur tersebut menurunkan prediksi cancel untuk booking ini."
                             )
 
-    st.markdown("### Simulator")
+    st.markdown("### Simulator: What-if Cancellation Prediction")
+
+    st.caption(
+        "Simulator digunakan untuk mencoba skenario baru. "
+        "Ubah nilai input seperti lead_time, deposit_type, market_segment, atau special request, "
+        "lalu klik Predict untuk melihat prediksi cancel dari model. "
+        "Hasil simulator bukan data aktual, tetapi prediksi untuk skenario yang kamu buat."
+    )
     if "model_pipe" not in st.session_state:
         st.info("Run model dulu.")
     else:
@@ -1922,7 +1929,13 @@ with tab7:
         y_test = st.session_state["y_test"]
         pipe = st.session_state["model_pipe"]
         default_row = X_train.mode(dropna=True).iloc[0].copy()
-
+        
+        st.info(
+            "Cara pakai: mulai dari nilai default, lalu ubah satu atau beberapa faktor. "
+            "Contoh: turunkan lead_time, ubah deposit_type, atau tambah total_of_special_requests. "
+            "Bandingkan hasil probability sebelum dan sesudah perubahan."
+        )
+        
         with st.form("sim_form"):
             user_input = {}
             picked = [
@@ -1977,10 +1990,20 @@ with tab7:
             prob = float(pipe.predict_proba(sim_df)[:, 1][0])
             pred_label = "Canceled" if prob >= threshold else "Not Canceled"
 
-            c1, c2 = st.columns(2)
-            c1.metric("Predicted cancel probability", f"{prob:.2%}")
-            c2.metric("Predicted class", pred_label)
+            default_df = pd.DataFrame([default_row])[X_train.columns]
+            default_prob = float(pipe.predict_proba(default_df)[:, 1][0])
+            delta_prob = prob - default_prob
 
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Default scenario probability", f"{default_prob:.2%}")
+            c2.metric("Simulated scenario probability", f"{prob:.2%}")
+            c3.metric("Change vs default", f"{delta_prob:+.2%}")
+
+            st.info(
+                f"Interpretasi: untuk skenario yang dimasukkan, model memperkirakan probability cancel sebesar {prob:.2%}. "
+                f"Dengan threshold {threshold:.2f}, booking ini diklasifikasikan sebagai **{pred_label}**."
+            )
+            
             donut_df = pd.DataFrame({"label": ["Cancel", "Remaining"], "value": [prob, 1 - prob]})
             donut_chart = (
                 alt.Chart(donut_df)
@@ -1994,3 +2017,5 @@ with tab7:
                 .interactive()
             )
             st.altair_chart(donut_chart, use_container_width=False)
+            st.markdown("#### Input skenario yang digunakan")
+            st.dataframe(sim_df, use_container_width=True)
