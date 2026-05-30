@@ -1,2 +1,7 @@
-# Cancel-Prediction-Prosperity
-End-to-end analysis of hotel booking data to identify cancellation drivers, engineer operational features, and build a predictive model for cancelation risk. Covers data cleaning, exploratory analysis, feature engineering, threshold optimization, and business recommendations to improve inventory control, revenue protection, and forecasting quality.
+# Who Will Cancel? A Hotel Booking Prediction App with Explainable AI and Scenario Simulation
+_*Predict cancellations. Understand the why. Simulate the what-if._
+
+![Python](https://img.shields.io/badge/Python-3.x-blue)
+![Streamlit](https://img.shields.io/badge/Streamlit-App-red)
+![Machine Learning](https://img.shields.io/badge/Machine%20Learning-Classification-orange)
+![XAI](https://img.shields.io/badge/Explainable%20AI-Enabled-green)
