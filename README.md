@@ -37,7 +37,7 @@ Each row in this dataset tells the story of one hotel booking:
 
 Before any scores, we clean and make sense of every column so the results remain trustworthy.
 
-# 📋 Understanding Our Bookings
+# Understanding Our Bookings
 
 Each row in this dataset tells the story of one hotel booking:
 - **Who** is staying? — number of adults, children, and babies
