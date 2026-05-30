@@ -26,3 +26,99 @@ streamlit run app.py
 
 Then open your browser at `http://localhost:8501`
 **Note:** Python 3.10+ recommended.
+
+# Understanding Our Deliveries
+Each row in this dataset tells the story of one hotel booking:
+- Who is staying? — number of adults, children, and babies
+- Where are they staying? — which hotel
+- When are they coming? — arrival date, how far in advance they booked
+- How are they booking? — through which channel, what deposit type
+- Did they cancel? — that's what we're trying to predict
+
+Before any scores, we clean and make sense of every column so the results remain trustworthy.
+
+# 📋 Understanding Our Bookings
+
+Each row in this dataset tells the story of one hotel booking:
+- **Who** is staying? — number of adults, children, and babies
+- **Where** are they staying? — which hotel, which country
+- **When** are they coming? — arrival date, how far in advance they booked
+- **How** are they booking? — through which channel, what deposit type
+- **Did they cancel?** — that's what we're trying to predict
+
+Before any machine learning, we clean and make sense of every column so the results remain trustworthy.
+
+| Column | Type | What It Means | Notes & Handling |
+|--------|------|---------------|-----------------|
+| `bookingID` | `int` | Unique identifier for each booking | Used for room-level splitting; **dropped before modeling** so the model does not memorise IDs |
+| `hotel` | `category` | Which hotel the guest booked | 64 unique hotels; cleaned and encoded |
+| `is_canceled` | `int (0/1)` | Did the guest cancel? | **Target variable** — this is what the model predicts |
+| `lead_time` | `int` | How many days before arrival the booking was made | Longer lead time = higher cancel risk; avg 144 days for cancellations vs 80 days for non-cancellations |
+| `arrival_date_year` | `int` | Year of arrival | Used for train/test time-based split |
+| `arrival_date_month` | `category` | Month of arrival | Cleaned; used to engineer `season` feature |
+| `arrival_date_week_number` | `int` | Week number of arrival | Supports seasonal pattern detection |
+| `arrival_date_day_of_month` | `int` | Day of month of arrival | Granular arrival timing |
+| `stays_in_weekend_nights` | `int` | Number of weekend nights booked | Combined with week nights to get total stay length |
+| `stays_in_week_nights` | `int` | Number of weekday nights booked | Combined with weekend nights to get total stay length |
+| `adults` | `int` | Number of adults in the booking | Used in room-splitting logic — max 4 guests per room |
+| `children` | `float` | Number of children in the booking | 3 missing values → imputed with median; must have at least 1 adult per room |
+| `babies` | `int` | Number of babies in the booking | Treated same as children in room-splitting rules |
+| `meal` | `category` | Meal plan selected (BB, HB, FB, SC, Undefined) | Cleaned and encoded |
+| `country` | `category` | Guest's country of origin | 346 missing values → imputed with most frequent; 165 unique countries |
+| `market_segment` | `category` | How the guest found the hotel (e.g. Online TA, Direct, Groups) | Groups cancel at 60%; Online TA at 37% |
+| `distribution_channel` | `category` | Channel through which booking was made (e.g. TA/TO, Direct) | Cleaned and encoded |
+| `is_repeated_guest` | `int (0/1)` | Has this guest stayed before? | Repeated guests cancel only 10% of the time vs 38% for new guests |
+| `previous_cancellations` | `int` | How many times this guest cancelled in the past | Guests with prior cancellations cancel again 91% of the time |
+| `previous_bookings_not_canceled` | `int` | How many past bookings this guest completed | Higher count = more trustworthy guest |
+| `reserved_room_type` | `category` | Room type the guest originally requested | Compared with assigned room to detect mismatches |
+| `assigned_room_type` | `category` | Room type the guest was actually given | **Dropped before modeling** — only known after check-in, would cause data leakage |
+| `booking_changes` | `int` | How many times the booking was modified | Changes may indicate engaged or uncertain guests |
+| `deposit_type` | `category` | Type of deposit paid (No Deposit, Non Refund, Refundable) | Non Refund bookings cancel 99.3% of the time — a key signal |
+| `agent` | `float` | ID of the travel agent who made the booking | 11,404 missing values → imputed with median; used to detect bulk-booking agents |
+| `company` | `float` | ID of the company who made the booking | 78,559 missing values (94%) → **dropped** due to excessive missingness |
+| `days_in_waiting_list` | `int` | How many days the booking sat on the waiting list | Waiting list bookings may behave differently |
+| `customer_type` | `category` | Type of customer (Transient, Contract, Group, Transient-Party) | Transient customers cancel at 41% — the highest among all types |
+| `adr` | `float` | Average daily rate — the room price per night | Used to estimate revenue at risk; engineered into `room_revenue` and `booking_revenue` |
+| `required_car_parking_spaces` | `int` | Number of parking spaces requested | Guests who request parking cancel less often |
+| `total_of_special_requests` | `int` | Number of special requests made | Guests with zero requests cancel at 47% vs 22% for those with requests |
+| `reservation_status` | `category` | Final status of the booking (Check-Out, Canceled, No-Show) | **Dropped before modeling** — this is a post-event label, direct leakage of the target |
+| `reservation_status_date` | `date` | Date the reservation status was last updated | Used only for train/test split boundary; **dropped before modeling** |
+
+**Before any model runs, the data goes through a cleaning pass:**
+- Extra spaces and typos in text columns are fixed automatically
+- Missing values are filled — numbers use the median, categories use the most common value
+- Columns like company (94% missing) are dropped entirely
+- Columns that would "cheat" the model — like reservation_status and assigned_room_type — are removed before training
+- Data is split 80% for training, 20% for testing, using a time-based boundary so the model never sees future data during training
+
+# Attachment
+- [Data Processing](https://colab.research.google.com/drive/1_NC888eTnuIVT-aEAOw0Sttztr5aiPS_?usp=share_link)
+
+# What We Bring To The Table? 
+
+## Why the Model Is Useful?
+
+### What are we trying to answer here?
+- **Hotels confirm too easily:** bookings are accepted and locked in without clear conditions, especially for bulk reservations. No deposit tiers, no cancellation windows, just "confirmed."
+- **No memory of guest behavior:** a guest who cancelled three times before walks in with the same treatment as a first-time loyal customer. The system does not remember, so the pattern repeats.
+- **Room for manipulation:** certain booking patterns suggest fictitious reservations, this appears concentrated in specific marketing channels.
+
+### What are we trying to answer here?
+- **Hotels often confirm bookings without conditions:** no deposit tiers, no cancellation windows, no memory of past guest behavior. The result is a system that is easy to game and hard to protect.
+- **A 37% cancellation rate does not mean 37% of guests are unreliable.** It means the booking process itself has gaps: bulk bookings with no deposit requirements, repeat cancellers treated like first-time guests, and marketing channels with suspicious booking patterns.
+- **The real question is not "will this booking cancel?"** - it is "is this booking serious enough to hold a room for?"
+- This model exists to answer that question at the moment it matters most: **when the booking comes in, not after the guest fails to show up.**
+
+### How do we approach this?
+- **The data starts at the booking level**, but a booking for 5 people (especially when it involve minors in between) **sometimes is not one room, it is two**. So the first step is splitting every booking into individual rooms, because cancellation risk lives at the room level, not just the booking level.
+- From there, **new columns are made engineered-ly to surface patterns the raw data hides:** how long until arrival, how much revenue is at risk per room, whether the guest has any history of cancelling, and whether the booking came through a channel that tends to cancel more.
+- **Those patterns are then confirmed:** certain months, certain hotels, certain deposit types, certain market segments all show statistically different cancel rates. The data is not guessing; it is showing.
+- **The cleaned, enriched dataset is split 80/20:** 80% to train the model, 20% to test whether it holds up on bookings it has never seen.
+- **The output is a cancellation probability per booking** and from there, the app lets you drill down: filter by segment, pick a specific booking, and see exactly which factors made that guest a risk.
+
+### What do we actually get out of it?
+A hotel manager who opens this app every morning does not just see numbers — they see decisions waiting to be made.
+- **For operations:** rooms are no longer prepared blindly. High-risk bookings are flagged in advance, so the team knows which reservations need follow-up and which ones are solid enough to prepare for.
+- **For marketing:** bonus structures can shift from rewarding bookings confirmed to bookings completed — closing the gap that allows fictitious or low-commitment reservations to slip through.
+- **For customer policy:** deposit tiers now have a data foundation. Instead of a blanket "no deposit" or "non-refund" rule, the app shows which booking profiles genuinely need a deposit to be taken seriously — and which ones are low-risk enough to stay flexible.
+- **The bottom line:** the app does not replace human judgment, it gives that judgment something solid to stand on. Every SOP decision, from refund windows to bulk booking requirements, can now point to data instead of gut feeling.
