@@ -101,6 +101,20 @@ def reset_pipeline_state(clear_data: bool = False) -> None:
 def read_uploaded_csv(file_bytes: bytes) -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(file_bytes), low_memory=False)
 
+@st.cache_data(show_spinner=False)
+def _load_default_dataset() -> pd.DataFrame:
+    import requests, io
+    file_id = "1lbYWPPXlC8vE0qJ17nvb8RNIioU07hUH"
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    session = requests.Session()
+    response = session.get(url, stream=True)
+    for key, value in response.cookies.items():
+        if key.startswith("download_warning"):
+            url = f"{url}&confirm={value}"
+            response = session.get(url, stream=True)
+            break
+    return pd.read_csv(io.BytesIO(response.content), low_memory=False)
+
 def get_categorical_cols(df: pd.DataFrame) -> list[str]:
     cols = []
     for c in df.columns:
@@ -734,11 +748,6 @@ def compute_pdp_1d(pipe: Pipeline, X_ref: pd.DataFrame, feat: str, grid_size: in
 
 # SIDEBAR
 with st.sidebar:
-    st.header("Data source")
-    with st.form("upload_form"):
-        uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="manual_upload_csv")
-        load_btn = st.form_submit_button("Load data")
-
     st.header("Manual limits")
     total_rows_loaded = len(st.session_state["df_raw"]) if "df_raw" in st.session_state else 5000
     preview_rows = st.number_input(
@@ -807,20 +816,13 @@ with st.sidebar:
         if reset_global_filter_btn:
             st.session_state["active_filters"] = {}
 
-if load_btn:
-    reset_pipeline_state(clear_data=True)
-    if uploaded_file is None:
-        st.sidebar.warning("Upload CSV dulu.")
-    else:
-        try:
-            st.session_state["df_raw"] = read_uploaded_csv(uploaded_file.getvalue())
-            st.sidebar.success("Data loaded.")
-        except Exception as e:
-            st.sidebar.error(f"Gagal load data: {e}")
-
 if "df_raw" not in st.session_state:
-    st.info("Upload file CSV kamu sendiri dari sidebar, lalu klik **Load data**.")
-    st.stop()
+    with st.spinner("Memuat dataset..."):
+        try:
+            st.session_state["df_raw"] = _load_default_dataset()
+        except Exception as e:
+            st.error(f"Gagal memuat data: {e}")
+            st.stop()
 
 df_raw = st.session_state["df_raw"]
 st.caption(f"Rows loaded: **{len(df_raw):,}**")
