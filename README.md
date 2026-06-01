@@ -201,13 +201,8 @@ A hotel manager who opens this app every morning does not just see numbers — t
 
 <table align="center">
   <tr>
-    <td colspan="2" align="center">
-      <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20before%20split.png" alt="Before Split" width="600">
-    </td>
-  </tr>
-  <tr>
-    <td align="center"><img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20after%20split%201.png" alt="After Split" alt="After Split" width="350"></td>
-    <td align="center"><img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20after%20split%202.png" alt="Bulk Only" width="350"></td>
+    <td align="center"><img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20before%20split.png" alt="Before Split" width="450"></td>
+    <td align="center"><img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20after%20split%202.png" alt="Bulk Bookings Only" width="450"></td>
   </tr>
 </table>
 
