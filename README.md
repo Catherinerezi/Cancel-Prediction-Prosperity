@@ -122,3 +122,36 @@ A hotel manager who opens this app every morning does not just see numbers — t
 - **For marketing:** bonus structures can shift from rewarding bookings confirmed to bookings completed — closing the gap that allows fictitious or low-commitment reservations to slip through.
 - **For customer policy:** deposit tiers now have a data foundation. Instead of a blanket "no deposit" or "non-refund" rule, the app shows which booking profiles genuinely need a deposit to be taken seriously — and which ones are low-risk enough to stay flexible.
 - **The bottom line:** the app does not replace human judgment, it gives that judgment something solid to stand on. Every SOP decision, from refund windows to bulk booking requirements, can now point to data instead of gut feeling.
+
+## How Big the Problem Is?
+
+### What are we trying to understand about the data?
+- A cancellation is not just a lost booking. It is a preparation that never needed to happen, a room that sat empty during peak season, a marketing promo built on a reservation that was never serious, and an operations team that spent the day getting ready for guests who never came.
+- When this happens repeatedly — and the data shows it does, **37% of all bookings cancel** — the damage compounds. Staff work without clear goals. Schedules are built around bookings that dissolve. And because there was never a warning system, the same guests cancel again and again with no consequence.
+- **The dataset itself reflects this chaos:** bookings are recorded at the reservation level, not the room level — so nobody actually knows _how many rooms were sold_, _how many were genuinely occupied_, and _how many were just numbers on a spreadsheet_.
+- This section exists to make that problem visible: in numbers, in patterns, and in the segments where it hurts the most, **before the model tries to fix it**.
+
+### What does the data actually show?
+- The first thing the data reveals is a question: "What was this system actually optimising for? **The number of bookings**, or **the number of rooms genuinely filled?**" Because the two are very different things, and the data suggests only one was being tracked.
+- Bookings are recorded by ID with no room-level breakdown. A reservation for 13 rooms packed into a reservation for 1. **Nobody in the system was asking how many beds were actually being prepared.**
+- Once you look past that, the patterns are not surprising — they are inevitable:
+
+| What the data shows | The number |
+|---------------------|------------|
+| Overall cancellation rate | **37%** — nearly 1 in 3 bookings |
+| Guests who cancelled before, cancelling again | **91.3%** — and they were let back in every time |
+| Non Refund bookings that still cancelled | **99.3%** — the deposit type meant nothing |
+| Group bookings that cancelled | **60.7%** — the largest and riskiest segment |
+| Bookings with no special requests that cancelled | **47.6%** — no engagement, no commitment |
+| Average lead time for cancellations | **144 days** — booked far ahead, cancelled without consequence |
+
+<p align="center">
+  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20cancel%20rate%20per%20deposit%20type.png" alt="Visualisasi 1" width="750">
+</p>
+
+<p align="center">
+  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20cancel%20rate%20per%20market%20segment.png" alt="Visualisasi 1" width="750">
+</p>
+
+- A guest **who has cancelled multiple times before walks in with the same welcome as a first-time loyal customer**. A group booking 13 rooms with no deposit, made 5 months in advance, gets confirmed like any other. Peak season or not.
+- The data does not reveal a mystery. _It reveals a system that was never designed to say no._
