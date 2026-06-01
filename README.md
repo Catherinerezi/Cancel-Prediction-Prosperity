@@ -154,3 +154,17 @@ A hotel manager who opens this app every morning does not just see numbers — t
 
 - A guest **who has cancelled multiple times before walks in with the same welcome as a first-time loyal customer**. A group booking 13 rooms with no deposit, made 5 months in advance, gets confirmed like any other. Peak season or not.
 - The data does not reveal a mystery. _It reveals a system that was never designed to say no._
+
+### How do we explore this in practice?
+- The EDA section of the app is built around one simple principle: the further right the bar, the worse the cancellation problem in that category.
+- Instead of reading a static report, hotel teams can filter interactively — by deposit type, market segment, customer type, arrival month, and more — and watch the cancel rates shift in real time.
+- But the app also surfaces the findings that matter most, so you do not have to go looking:
+  - **Non Refund and No Deposit bookings sit at the top of the cancel chart:** bookings with no financial commitment cancel at the highest rates
+  - **Group market segment is the most dangerous bulk category:** cancelling at over 60%, second only to Undefined which represents unknown or mixed sources
+  - **Lead time is a consistent signal:** cancellations cluster heavily at 144+ days before arrival, meaning the further out a booking is made, the less it should be trusted without a deposit
+  - **Peak season is not protected:** a disproportionate share of cancellations happen in the lead-up to high-demand periods, exactly when an empty room hurts the most
+
+### What picture does this paint?
+- The data does not just show a cancellation problem — it shows **a system without boundaries**. No clear rules for bulk bookings, no consequences for repeat cancellers, no deposit structure that means anything. The result is **a spreadsheet full of numbers that look like revenue but are not**.
+- What this data is really asking for **is not a better algorithm.** _It is a clearer SOP_ — one that applies to customers just as much as it applies to staff. When the rules are clear, operations know who they are preparing for, marketing has no room to game the system, and the guests who do show up are the ones who were serious from the start.
+- **A hotel with honest data is a hotel that can plan.** And honest data starts with bookings that mean something.
