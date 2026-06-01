@@ -146,11 +146,8 @@ A hotel manager who opens this app every morning does not just see numbers — t
 | Average lead time for cancellations | **144 days** — booked far ahead, cancelled without consequence |
 
 <p align="center">
-  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20cancel%20rate%20per%20deposit%20type.png" alt="Visualisasi 1" width="750">
-</p>
-
-<p align="center">
-  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20cancel%20rate%20per%20market%20segment.png" alt="Visualisasi 1" width="750">
+  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20cancel%20rate%20per%20deposit%20type.png" alt="Cancel rate by deposit type" width="480">
+  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20cancel%20rate%20per%20market%20segment.png" alt="Cancel rate by market segment" width="480">
 </p>
 
 - A guest **who has cancelled multiple times before walks in with the same welcome as a first-time loyal customer**. A group booking 13 rooms with no deposit, made 5 months in advance, gets confirmed like any other. Peak season or not.
