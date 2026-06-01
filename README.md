@@ -198,3 +198,14 @@ A hotel manager who opens this app every morning does not just see numbers — t
 
 - This matters because the original data was never asking _"how many rooms cancelled?"_ — it was only asking _"how many bookings cancelled?"_ Those are very different questions when **one booking can mean 13 rooms sitting empty on a peak season night**.
 - Bulk bookings of 3 or more rooms are now flagged automatically, making the segment that **cancels at 60%+** finally visible and trackable at the room level.
+
+<p align="center">
+  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20before%20split.png" alt="Before Split" width="700">
+</p>
+
+<table align="center">
+  <tr>
+    <td align="center"><img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20after%20split%201.png" alt="After Split" width="350"></td>
+    <td align="center"><img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20after%20split%202.png" alt="Bulk Only" width="350"></td>
+  </tr>
+</table>
