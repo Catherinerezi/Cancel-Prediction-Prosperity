@@ -178,11 +178,23 @@ A hotel manager who opens this app every morning does not just see numbers — t
 - It does. And that difference is what makes this model's view of bulk booking risk more grounded than a standard per-booking prediction.
 
 ### How do we approach this?
-- Every booking is broken down into individual rooms using a strict set of occupancy rules that reflect how hotels actually work — not just how the data is recorded.
+- Every booking is broken down into individual rooms using a strict set of occupancy rules that reflect how hotels actually work, not just how the data is recorded.
 - The rules are straightforward:
-  - Maximum 4 guests per room — adults, children, and infants combined, assuming standard room type with no extra charge for additional beds
-  - Every room with a child or infant must have at least 1 adult — a child cannot check in alone, so the system always assigns an adult first before filling the remaining 3 spots with minors
-  - Leftover adults fill remaining rooms — after all children and infants are placed with an adult, any remaining adults are grouped together up to 4 per room
-  - No child or infant is ever left without an adult — if after splitting there is 1 child remaining, they are merged into a room that still has capacity rather than placed alone
-- The result is a room-level dataset where every row represents a realistic, occupiable room — not just a line in a booking system.
+  - **Maximum 4 guests per room:** adults, children, and infants combined, assuming standard room type with no extra charge for additional beds
+  - **Every room with a child or infant must have at least 1 adult:** a child cannot check in alone, so the system always assigns an adult first before filling the remaining 3 spots with minors
+  - **Leftover adults fill remaining rooms:** after all children and infants are placed with an adult, any remaining adults are grouped together up to 4 per room
+  - **No child or infant is ever left without an adult:** if after splitting there is 1 child remaining, they are merged into a room that still has capacity rather than placed alone
+- The result is a room-level dataset where every row represents a realistic, occupiable room. _Not just a line in a booking system._
 - Bulk bookings of 3 or more rooms are automatically flagged, because that threshold is where cancellation risk jumps significantly.
+
+### What do we actually get out of it?
+- Before splitting, the data looks simple: **83,293 bookings**, each appearing as one row, one cancellation risk.
+- After splitting, the real picture emerges: most bookings are indeed single rooms — **83,131 of them**. But hidden inside **the rest are bookings of 2, 3, 4, 5, 6, 7, and even 13 rooms under a single ID.**
+- The total becomes **83,475 rooms** and each one now has its own cancellation profile, its own guest composition, and its own revenue at risk.
+
+<p align="center">
+  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/SUMMARY%20ROWS%20BEFORE%20VS%20AFTER.png" alt="Visualisasi 3" width="500">
+</p>
+
+- This matters because the original data was never asking _"how many rooms cancelled?"_ — it was only asking _"how many bookings cancelled?"_ Those are very different questions when **one booking can mean 13 rooms sitting empty on a peak season night**.
+- Bulk bookings of 3 or more rooms are now flagged automatically, making the segment that **cancels at 60%+** finally visible and trackable at the room level.
