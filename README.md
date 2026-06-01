@@ -168,3 +168,21 @@ A hotel manager who opens this app every morning does not just see numbers — t
 - The data does not just show a cancellation problem — it shows **a system without boundaries**. No clear rules for bulk bookings, no consequences for repeat cancellers, no deposit structure that means anything. The result is **a spreadsheet full of numbers that look like revenue but are not**.
 - What this data is really asking for **is not a better algorithm.** _It is a clearer SOP_ — one that applies to customers just as much as it applies to staff. When the rules are clear, operations know who they are preparing for, marketing has no room to game the system, and the guests who do show up are the ones who were serious from the start.
 - **A hotel with honest data is a hotel that can plan.** And honest data starts with bookings that mean something.
+
+## What Makes This Approach Different?
+
+### What are we trying to answer here?
+- **The raw data treats every booking the same:** one row, one ID, regardless of whether it is 1 room or 13. That means bulk bookings, which cancel at over 60%, are invisible in the data unless you go looking for them.
+- But there is a second problem: **the guest composition is not realistic.** _Children and infants appear in bookings with no adult assigned to their room_ — which does not happen in practice. A baby does not check in alone.
+- So the question this section answers is: "If we split every booking into individual rooms the way they would actually be assigned — with realistic occupancy rules — does the cancellation picture change?"
+- It does. And that difference is what makes this model's view of bulk booking risk more grounded than a standard per-booking prediction.
+
+### How do we approach this?
+- Every booking is broken down into individual rooms using a strict set of occupancy rules that reflect how hotels actually work — not just how the data is recorded.
+- The rules are straightforward:
+  - Maximum 4 guests per room — adults, children, and infants combined, assuming standard room type with no extra charge for additional beds
+  - Every room with a child or infant must have at least 1 adult — a child cannot check in alone, so the system always assigns an adult first before filling the remaining 3 spots with minors
+  - Leftover adults fill remaining rooms — after all children and infants are placed with an adult, any remaining adults are grouped together up to 4 per room
+  - No child or infant is ever left without an adult — if after splitting there is 1 child remaining, they are merged into a room that still has capacity rather than placed alone
+- The result is a room-level dataset where every row represents a realistic, occupiable room — not just a line in a booking system.
+- Bulk bookings of 3 or more rooms are automatically flagged, because that threshold is where cancellation risk jumps significantly.
