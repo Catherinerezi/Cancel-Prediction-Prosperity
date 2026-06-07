@@ -247,3 +247,14 @@ A hotel manager who opens this app every morning does not just see numbers — t
 
 - Technically, **the model holds up on unseen data** — train and test scores stay close, meaning it generalises rather than memorising. But the more important reading is operational: the model is consistent enough to be trusted as an early warning system, not just a one-time experiment.
 - A guest who is inconsistent costs more than a booking that never came in. And the model's job is to make that inconsistency visible — early enough to do something about it.
+
+## How often is the prediction close enough?
+- **The model does not just output a single prediction**, _it gives a probability_, and the threshold for what counts as "likely to cancel" can be adjusted based on how cautious the hotel wants to be.
+- For hotel operations, **the cost of missing a cancellation is higher than the cost of a false alarm**. A booking flagged as high risk that turns out fine is manageable, the hotel can follow up, confirm, or apply a deposit requirement. A cancellation that was never flagged means an empty room on a night that could have been resold.
+- This is why recall matters more than precision here. The app's threshold slider lets hotel teams tune exactly that tradeoff, push the threshold lower to catch more cancellations, accepting that some false alarms come with it.
+
+<p align="center">
+  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Matrix%20treshold.png" alt="Matrix Treshold" width="500">
+</p>
+
+- And those false alarms are not wasted. Every over-flagged booking is an opportunity to identify which factors almost made it a real cancellation, and close that gap before it becomes one.
