@@ -228,3 +228,22 @@ A hotel manager who opens this app every morning does not just see numbers — t
 <p align="center">
   <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/DALEX%20Breakdown.png" alt="Prediksi vs Baseline" width="1000">
 </p>
+
+### What does this reveal about the model in practice?
+- **Every guest has their own reason to cancel** and the model respects that. At the global level, patterns emerge: high cancel rates appear year-round, not just in specific seasons, and the gap between "predicted to cancel" and "actually cancelled" is a reminder that no model is perfect.
+- Where it gets interesting is when global and individual-level explanations diverge. **A booking that looks safe** on average may **tell a different story once the DALEX breakdown surfaces its history**. A guest with **prior cancellations carries that signal forward** — and the model picks it up, even when everything else about the booking looks fine.
+- **The pattern repeats:** **guests who have cancelled before tend to cancel again**, and **this happens disproportionately in refundable bookings where there is no financial consequence for walking away.**
+- This is not just a model finding — **it is a policy gap**. The breakdown does not just explain a prediction, **it points directly to where an SOP needs to exist**: a clear commitment mechanism for guests, especially those the system has seen cancel before.
+
+# How reliable is our ETA on unseen orders?
+
+## What does the final test say?
+- **The numbers from the final test matter** — not because they are impressive on paper, but because **they point directly to where the hotel's boundaries need to be drawn.**
+- Every booking the model flags as high risk is a signal of a loophole that has not been closed yet: **a refund policy too loose to hold guests accountable**, a lead time window too long to mean anything, a repeat canceller who was never given different terms.
+
+<p align="center">
+  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Perbandingan%20Model.png" alt="Perbandingan Model" width="500">
+</p>
+
+- Technically, **the model holds up on unseen data** — train and test scores stay close, meaning it generalises rather than memorising. But the more important reading is operational: the model is consistent enough to be trusted as an early warning system, not just a one-time experiment.
+- A guest who is inconsistent costs more than a booking that never came in. And the model's job is to make that inconsistency visible — early enough to do something about it.
