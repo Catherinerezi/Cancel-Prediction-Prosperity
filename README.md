@@ -206,13 +206,25 @@ A hotel manager who opens this app every morning does not just see numbers — t
   </tr>
 </table>
 
+## How Does The Model Behave?
+
+### What are we trying to understand?
+- Building a model is easy. Building one that actually reflects how cancellations happen in the real world is harder.
+- After feature engineering adds new columns such as room-level compositions, revenue estimates, lead time buckets, seasonal flags. The model now has a much richer view of each booking than the raw data ever offered.
+- The question becomes: _"Does the model use these features in a way that makes sense?"_ A model that flags Non Refund deposits as high risk, penalises long lead times, and rewards special requests is behaving correctly, because that is what the data, and reality, both say.
+- If the model cannot make sense of all these signals together, then all the feature engineering means nothing. So this section exists to verify that it does.
+
+### How do we approach this?
+- Three model families are trained and compared: **Logistic Regression, Random Forest, and LightGBM** that each evaluated not just on one metric, but across a full battery of tests: ROC-AUC curve, Precision-Recall curve, calibration curve, and standard classification metrics.
+- The winner is not necessarily the one with the highest single score. It is the one that holds up consistently across all of them.
+
 <p align="center">
-  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20before%20split.png" alt="Before Split" width="700">
+  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Prediksi%20vs%20Baseline.png" alt="Prediksi vs Baseline" width="1000">
 </p>
 
-<table align="center">
-  <tr>
-    <td align="center"><img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20after%20split%201.png" alt="After Split" width="350"></td>
-    <td align="center"><img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/Chart%20after%20split%202.png" alt="Bulk Only" width="350"></td>
-  </tr>
-</table>
+- LightGBM peaks in some areas but drops in calibration, meaning its probability estimates are less trustworthy even when its ranking is strong. A model that says _"this booking has a 70% cancel risk"_ should mean something. If the calibration is off, that number cannot be trusted.
+- Logistic Regression is chosen as the primary model because it is the most stable across all evaluation dimensions. It does not dominate in any single metric, but it never collapses in another. For a tool that hotel teams will use to make real policy decisions, consistency matters more than peak performance.
+
+<p align="center">
+  <img src="https://github.com/Catherinerezi/Cancel-Prediction-Prosperity/blob/main/assets/DALEX%20Breakdown.png" alt="Prediksi vs Baseline" width="1000">
+</p>
