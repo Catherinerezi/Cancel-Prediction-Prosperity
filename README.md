@@ -258,3 +258,11 @@ A hotel manager who opens this app every morning does not just see numbers — t
 </p>
 
 - And those false alarms are not wasted. Every over-flagged booking is an opportunity to identify which factors almost made it a real cancellation, and close that gap before it becomes one.
+
+# What Does This App Tell You?
+
+### What do we now know?
+- **Cancellations are not bad luck, they are a system problem.** The data shows consistent, repeatable patterns: guests with no deposit cancel more, guests with prior cancellations cancel again, bulk bookings cancel at the highest rates. These are not surprises. They are gaps in policy that have been left open.
+- **Room-level thinking changes everything.** A booking that looks like one cancellation is sometimes 13 rooms of lost revenue on a peak season night. The difference between "how many bookings cancelled" and "how many rooms cancelled" is the difference between a manageable number and an operational crisis.
+- **Individual explanation is what makes prediction actionable.** Knowing the Group segment cancels at 60% is useful. Knowing that booking #30650 specifically is below baseline risk and exactly why is what a hotel manager can act on today.
+- **The model is only as useful as the policy behind it.** A flagged booking means nothing if there is no SOP to respond to it. The real value of this app is not the prediction, it is the foundation it gives hotel teams to build boundaries that actually hold.
