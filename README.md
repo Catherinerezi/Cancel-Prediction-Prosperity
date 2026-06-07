@@ -266,3 +266,24 @@ A hotel manager who opens this app every morning does not just see numbers — t
 - **Room-level thinking changes everything.** A booking that looks like one cancellation is sometimes 13 rooms of lost revenue on a peak season night. The difference between "how many bookings cancelled" and "how many rooms cancelled" is the difference between a manageable number and an operational crisis.
 - **Individual explanation is what makes prediction actionable.** Knowing the Group segment cancels at 60% is useful. Knowing that booking #30650 specifically is below baseline risk and exactly why is what a hotel manager can act on today.
 - **The model is only as useful as the policy behind it.** A flagged booking means nothing if there is no SOP to respond to it. The real value of this app is not the prediction, it is the foundation it gives hotel teams to build boundaries that actually hold.
+
+# What To Do Next?
+
+### Turn the model's flags into enforceable booking rules.
+- Bookings flagged as high risk should trigger a different process — not a rejection, but a requirement. A partial deposit, a shorter cancellation window, or a confirmation call. The model tells you who to watch; the SOP tells you what to do about it.
+- For bulk bookings of 3 or more rooms, require a deposit upfront — at minimum enough to cover one night's operational cost. The data shows these cancel at over 60%, and right now there is nothing stopping them.
+
+### Build a guest history system, not just a booking system.
+- Guests who have cancelled before cancel again 91.3% of the time — and currently walk back in with the same terms as a first-time guest. That needs to change.
+- Flag repeat cancellers at the point of booking, not at check-in. Apply stricter deposit or non-refundable terms automatically for guests with a cancellation history.
+
+### Close the marketing loophole before it closes you.
+- Certain booking patterns suggest fictitious reservations made to hit sales targets. Bonus structures that reward bookings confirmed rather than bookings completed create this incentive.
+- Shift marketing incentives to completed stays, not confirmed bookings. This one change alone removes the structural reason for fake reservations to exist.
+
+### Use the simulator before setting any new policy.
+- Before changing refund windows, deposit tiers, or cancellation terms — test it in the simulator first. Change the inputs, see how the predicted cancel probability shifts, and make the decision with data instead of instinct.
+
+### Retrain the model as the policy changes.
+- Once SOPs tighten, guest behaviour will shift. The model was trained on a system with loose rules — as those rules change, new data will tell a different story.
+- Log predictions and outcomes, recheck accuracy every few months, and retrain when the gap between predicted and actual starts to widen.
