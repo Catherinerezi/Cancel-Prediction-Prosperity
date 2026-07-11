@@ -4,12 +4,17 @@ from __future__ import annotations
 import warnings
 warnings.filterwarnings("ignore")
 
-import io
+import os
+os.environ["DALEX_VERBOSITY"] = "0"
 import numpy as np
 import pandas as pd
 import altair as alt
 import streamlit as st
-import dalex as dx
+try:
+    import dalex as dx
+    DALEX_AVAILABLE = True
+except Exception:
+    DALEX_AVAILABLE = False
 
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
@@ -602,9 +607,12 @@ def make_representative_baseline_from_training(pipe, X_train: pd.DataFrame, max_
 
 
 def make_dalex_background_explainer(pipe, background: pd.DataFrame):
+    if not DALEX_AVAILABLE:
+        return None
+    
     def predict_proba_positive(model, data):
         return model.predict_proba(data)[:, 1]
-
+    
     explainer = dx.Explainer(
         model=pipe,
         data=background,
@@ -613,7 +621,6 @@ def make_dalex_background_explainer(pipe, background: pd.DataFrame):
         label="Logistic Regression - baseline vs actual",
         verbose=False,
     )
-
     return explainer
 
 def train_and_compare_models(X_train, y_train, X_test, y_test):
