@@ -4,7 +4,7 @@ numpy==1.26.4
 scikit-learn==1.4.2
 altair==5.3.0
 lightgbm==4.3.0
-dalex==1.7.0
+dalex==1.6.1
 gdown==5.1.0
 scipy
 plotly
