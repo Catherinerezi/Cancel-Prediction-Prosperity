@@ -133,8 +133,8 @@ def get_numeric_cols(df: pd.DataFrame) -> list[str]:
 @st.cache_data(show_spinner=False)
 def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
+    del df  # bebaskan RAM
     out.columns = [c.strip() for c in out.columns]
-
     for c in out.select_dtypes(include=["object"]).columns:
         out[c] = (
             out[c]
@@ -142,18 +142,14 @@ def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
             .str.strip()
             .str.replace(r"\s+", " ", regex=True)
         )
-
     if "reservation_status_date" in out.columns:
         out["reservation_status_date"] = pd.to_datetime(
             out["reservation_status_date"], errors="coerce"
         )
-
-    # drop kolom dengan missing > 20%
     missing_percentage = out.isna().mean() * 100
     cols_to_drop = missing_percentage[missing_percentage > 20].index.tolist()
     if cols_to_drop:
         out = out.drop(columns=cols_to_drop, errors="ignore")
-
     for c in ["agent", "country", "children"]:
         if c in out.columns:
             if pd.api.types.is_numeric_dtype(out[c]):
@@ -163,14 +159,14 @@ def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
                 m = out[c].mode(dropna=True)
                 if not m.empty:
                     out[c] = out[c].fillna(m.iat[0])
-
     if "is_canceled" in out.columns:
         out["is_canceled"] = (
             pd.to_numeric(out["is_canceled"], errors="coerce")
             .fillna(0)
             .astype(int)
         )
-
+    import gc
+    gc.collect()
     return out
 
 def apply_filters(df: pd.DataFrame, filter_cols: list[str], selections: dict[str, list]) -> pd.DataFrame:
