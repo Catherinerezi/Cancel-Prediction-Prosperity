@@ -8,4 +8,4 @@ dalex==1.7.0
 gdown==5.1.0
 scipy
 plotly
-setuptools
+setuptools>=65.0.0
