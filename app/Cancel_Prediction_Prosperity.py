@@ -113,7 +113,7 @@ def _load_default_dataset() -> pd.DataFrame:
             url = f"{url}&confirm={value}"
             response = session.get(url, stream=True)
             break
-    return pd.read_csv(io.BytesIO(response.content), low_memory=False)
+    return pd.read_csv(io.BytesIO(response.content), low_memory=False, nrows=10000)
 
 def get_categorical_cols(df: pd.DataFrame) -> list[str]:
     cols = []
